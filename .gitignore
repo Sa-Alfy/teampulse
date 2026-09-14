@@ -23,6 +23,12 @@ output/
 npm-debug.log*
 yarn-debug.log*
 
+# Internal strategy & agent context (private, do not make public)
+PROJECT_CONTEXT.md
+*CONTEXT*.md
+notes/
+strategy/
+
 # Editor & OS files
 .vscode/
 .idea/
