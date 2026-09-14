@@ -1,0 +1,28 @@
+{
+  "name": "teamspulse",
+  "version": "0.1.0",
+  "description": "Automated academic dashboard and briefing engine for students using Microsoft Teams",
+  "main": "teams.js",
+  "scripts": {
+    "login": "node login-teams.js",
+    "scrape": "node teams.js",
+    "start": "node teams.js"
+  },
+  "keywords": [
+    "microsoft-teams",
+    "playwright",
+    "student-tool",
+    "web-scraper",
+    "academic-calendar",
+    "assignment-tracker"
+  ],
+  "author": "Shariar Ahamed",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Sa-Alfy/teampulse.git"
+  },
+  "dependencies": {
+    "playwright": "^1.63.0"
+  }
+}
