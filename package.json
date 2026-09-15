@@ -25,6 +25,7 @@
     "url": "https://github.com/Sa-Alfy/teampulse.git"
   },
   "dependencies": {
+    "better-sqlite3": "^13.0.3",
     "playwright": "^1.63.0"
   }
 }

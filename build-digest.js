@@ -1,4 +1,5 @@
 const fs = require("fs");
+const db = require("./db");
 
 const NOTICES_FILE = "notices.json";
 const ASSIGNMENTS_FILE = "assignments.json";
@@ -151,15 +152,47 @@ function main() {
     process.exit(1);
   }
 
+  // ── Initialise deduplication store ────────────────────────────────────────
+  db.ensureSchema();
+
   const notices = JSON.parse(fs.readFileSync(NOTICES_FILE, "utf-8"));
   const assignments = fs.existsSync(ASSIGNMENTS_FILE) ? JSON.parse(fs.readFileSync(ASSIGNMENTS_FILE, "utf-8")) : [];
 
   const assignmentsByClass = {};
   for (const entry of assignments) assignmentsByClass[entry.className] = entry.assignments || [];
 
-  let md = `# TeamsPulse Digest\n\n_Generated ${new Date().toISOString()} — rule-based, no AI involved._\n\n---\n\n`;
+  // ── Deduplication pass ────────────────────────────────────────────────────
+  // Separate every post into "new" vs "already seen" buckets, and collect
+  // the metadata needed to persist the new ones after the digest is written.
+  let totalPosts = 0;
+  let skippedPosts = 0;
+  const toMarkSeen = []; // [{ hash, className, post }]
 
-  for (const classEntry of notices) {
+  // Build a deduplicated copy of notices to pass to the digest builder.
+  const freshNotices = notices.map((classEntry) => {
+    const freshPosts = [];
+    for (const post of (classEntry.posts || [])) {
+      totalPosts++;
+      const hash = db.hashPost(classEntry.className, post);
+      if (db.isNew(hash)) {
+        freshPosts.push(post);
+        toMarkSeen.push({ hash, className: classEntry.className, post });
+      } else {
+        skippedPosts++;
+      }
+    }
+    return { ...classEntry, posts: freshPosts };
+  });
+
+  const newPosts = totalPosts - skippedPosts;
+  console.log(`📊 Dedup: ${newPosts} new post(s), ${skippedPosts} already seen (skipped).`);
+
+  // ── Build digest from new posts only ──────────────────────────────────────
+  let md = `# TeamsPulse Digest\n\n`;
+  md += `_Generated ${new Date().toISOString()} — rule-based, no AI involved._\n`;
+  md += `_${newPosts} new post(s) across ${freshNotices.length} class(es); ${skippedPosts} duplicate(s) suppressed._\n\n---\n\n`;
+
+  for (const classEntry of freshNotices) {
     md += `## ${classEntry.className}\n\n### Notices & Announcements\n\n`;
     md += buildNoticesSection(classEntry.posts || []);
     md += `\n### Assignments\n\n`;
@@ -168,7 +201,17 @@ function main() {
   }
 
   fs.writeFileSync(OUTPUT_FILE, md);
-  console.log(`✅ Done. Saved to ${OUTPUT_FILE}`);
+  console.log(`✅ Digest saved to ${OUTPUT_FILE}`);
+
+  // ── Persist new posts as seen ─────────────────────────────────────────────
+  // Done AFTER writing the digest so a crash mid-write doesn't silently lose
+  // posts — they'll simply reappear on the next run instead.
+  for (const entry of toMarkSeen) {
+    db.markSeen(entry.hash, { className: entry.className, post: entry.post });
+  }
+  console.log(`💾 Marked ${toMarkSeen.length} post(s) as seen in ${db.DB_PATH}`);
+
+  db.close();
 }
 
 main();
