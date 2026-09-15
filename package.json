@@ -7,6 +7,7 @@
     "login": "node login-teams.js",
     "scrape": "node teams.js",
     "scrape:posts": "node scrape-posts.js",
+    "digest": "node build-digest.js",
     "start": "node teams.js"
   },
   "keywords": [
