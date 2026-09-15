@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "TeamsPulse",
+  "version": "0.5.0",
+  "description": "Daily academic briefing from Microsoft Teams — new posts only.",
+  "permissions": [],
+  "host_permissions": ["http://localhost:3457/*"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  }
+}
+

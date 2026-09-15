@@ -1,6 +1,7 @@
 # TeamsPulse Digest
 
-_Generated 2026-09-15T09:10:05.135Z — rule-based, no AI involved._
+_Generated 2026-09-15T14:46:48.785Z — rule-based, no AI involved._
+_0 new post(s) across 6 class(es); 26 duplicate(s) suppressed._
 
 ---
 
@@ -24,11 +25,7 @@ _(no notable posts — either empty, or nothing matched the filters)_
 
 ### Notices & Announcements
 
-| Date | Time | Type | Summary | Source |
-|------|------|------|---------|--------|
-| 2026-07-06 | 8:30 - 11:30 AM | 🔄 Reschedule | 📢 Rescheduled Physics Lab Notice \| PHY 104 | MD. RAHMAT ULLAH, 7/5 5:32 PM |
-| — | — | 📌 Deadline | Please provide your project group information as soon as possible. You may submit the pro… | MD. RAHMAT ULLAH, 6/29 4:07 AM |
-| 2026-06-29 | 9:30 AM – 12:30 PM | 🔄 Reschedule | 📢 Makeup Class Reschedule Notice – PHY 104 ( Physics Lab ) | MD. RAHMAT ULLAH, 6/20 6:31 PM |
+_(no notable posts — either empty, or nothing matched the filters)_
 
 ### Assignments
 
@@ -40,10 +37,7 @@ _(no assignments recorded)_
 
 ### Notices & Announcements
 
-| Date | Time | Type | Summary | Source |
-|------|------|------|---------|--------|
-| 2026-09-02 | — | 📊 Grades | KSA-1 (Assignment - 5 Marks) Due Sep 2 | System, 8/26 2:57 PM |
-| 2026-08-21 | 9 AM | 🎤 Presentation | 21-08-2026 at 9 AM: Group Presentation Meeting Link: https://bdren.zoom.us/j/93531867570?… | Tanpia Tasnim, 8/20 1:49 PM |
+_(no notable posts — either empty, or nothing matched the filters)_
 
 ### Assignments
 
@@ -58,12 +52,7 @@ _(no assignments recorded)_
 
 ### Notices & Announcements
 
-| Date | Time | Type | Summary | Source |
-|------|------|------|---------|--------|
-| — | — | 📊 Grades | 60% Marks | Mayeesha Farjana, 9/2 2:52 PM |
-| 2026-09-02 | — | 📝 Exam | Lab Final Due 2 Sep | System, 9/2 11:56 AM |
-| — | — | 🎤 Presentation | Project Presentation | Md Nazimul Islam, 8/29 5:20 PM |
-| 2026-08-29 | 07.30 PM | 📝 Exam | Project Final | Mayeesha Farjana, 8/27 3:50 PM |
+_(no notable posts — either empty, or nothing matched the filters)_
 
 ### Assignments
 
@@ -85,10 +74,7 @@ _(no assignments recorded)_
 
 ### Notices & Announcements
 
-| Date | Time | Type | Summary | Source |
-|------|------|------|---------|--------|
-| 2026-07-18 | — | 🎤 Presentation | Presentation Slide Due Jul 18 | System, 7/10 7:39 PM |
-| — | — | 🎤 Presentation | Presentation team info | Md. Nobiul Haque Riyad, 7/6 1:32 PM |
+_(no notable posts — either empty, or nothing matched the filters)_
 
 ### Assignments
 
@@ -102,12 +88,7 @@ _(no assignments recorded)_
 
 ### Notices & Announcements
 
-| Date | Time | Type | Summary | Source |
-|------|------|------|---------|--------|
-| — | — | 📊 Grades | 70% marks(Updated) | Samia Rahman, 8/29 11:34 PM |
-| — | 7PM | 📝 Exam | Project final tomorrow at 7PM | Samia Rahman, 8/25 10:01 PM |
-| 2026-08-26 | 7PM-9PM | 📝 Exam | Submit project final report here within 26th August, project final will be online from 7P… | Samia Rahman, 8/24 3:41 PM |
-| — | 11:59 PM | 📌 Deadline | Submit your report and videos here according to your section, in your drive | Samia Rahman, 8/19 8:09 PM |
+_(no notable posts — either empty, or nothing matched the filters)_
 
 ### Assignments
 

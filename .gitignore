@@ -19,15 +19,21 @@ output/
 
 # Debug artifacts, screenshots, and logs
 *.png
+!extension/icons/*.png
 *.jpg
 *.jpeg
 *.log
 npm-debug.log*
 yarn-debug.log*
 
+# SQLite Database
+teamspulse.db
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
 # Internal strategy & agent context (private, do not make public)
-PROJECT_CONTEXT.md
-*CONTEXT*.md
 notes/
 strategy/
 

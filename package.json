@@ -8,6 +8,7 @@
     "scrape": "node teams.js",
     "scrape:posts": "node scrape-posts.js",
     "digest": "node build-digest.js",
+    "server": "node server.js",
     "start": "node teams.js"
   },
   "keywords": [
@@ -26,6 +27,7 @@
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",
+    "express": "^5.2.1",
     "playwright": "^1.63.0"
   }
 }

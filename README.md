@@ -139,6 +139,39 @@ node -e "const D=require('better-sqlite3')('teamspulse.db'); console.table(D.pre
 
 ---
 
+## 🧩 Chrome Extension
+
+TeamsPulse includes a lightweight Chrome/Edge Extension (Manifest V3) that provides a fast, dark-themed academic briefing popup without needing to open Microsoft Teams.
+
+### Features
+* 📚 **Categorized by Class**: See notices and assignments cleanly organized under each enrolled course (`CSE 312`, `PHY 104`, `MAT 103`, etc.).
+* 📑 **Category Switcher**: One-click tabs to switch between **All**, **📢 Notices**, and **📝 Tasks**.
+* 🔍 **Instant Search**: Filter notices, exams, CTs, teachers, and tasks in real time as you type.
+* 🟢 **Live Auto-Sync**: Automatically polls the local server every 15 seconds with an animated `● Live` status badge and last sync ticker.
+* 🏷️ **Color-Coded Badges**: Distinct visual tags for `🧪 CT/Quiz`, `📝 Exam`, `📌 Deadline`, `🎤 Presentation`, `📊 Grades`, and `🔄 Reschedule`.
+* ⏳ **Task Tracking**: Highlights `⚠️ Past Due` and `⏳ Upcoming` assignments with due dates.
+
+### Setup Instructions:
+1. **Start the local API server**:
+   ```bash
+   npm run server
+   ```
+   This serves your scraped notices and assignments locally at `http://localhost:3457` (with a friendly web dashboard and CORS enabled for extensions).
+
+2. **Install the extension in your browser**:
+   - Open Chrome or Edge and navigate to `chrome://extensions`
+   - Enable **Developer mode** (toggle in the top-right corner)
+   - Click **Load unpacked**
+   - Select the `extension/` folder inside your TeamsPulse directory
+
+3. **Pin & Use**:
+   - Pin the ⚡ **TeamsPulse** extension to your browser toolbar.
+   - Click the extension icon to view today's deadlines, upcoming CTs/quizzes, and class announcements.
+   - Filter by specific class or time range (`All Time` by default, `Last 24h`, `Last 48h`, `Last 7 days`).
+   - Hit 🔄 to refresh anytime after running `npm run scrape`.
+
+---
+
 ## 🗺️ Roadmap
 
 ### ✅ Phase 1: Core Scraper
@@ -150,13 +183,14 @@ node -e "const D=require('better-sqlite3')('teamspulse.db'); console.table(D.pre
 - [x] Rule-based digest builder — keyword + regex classification, zero AI dependency.
 - [x] **SQLite storage & deduplication** — SHA-256 fingerprint per post, skips seen items on every run.
 
-### 🔲 Phase 3: Client Interface (UI)
-- [ ] **Chrome / Edge Extension**: Leverages the student's existing web session (zero MFA hurdles). Quick popup showing today's deadlines, upcoming CTs, and unread notices.
-- [ ] **Web Dashboard**: Clean, responsive view for desktop and mobile.
+### ✅ Phase 3: Client Interface (UI)
+- [x] **Chrome / Edge Extension**: Fast popup showing today's deadlines, upcoming CTs, and new notices via local API server.
+- [x] **Course Categorization & Live Sync**: Auto-polling, category tabs, instant search, and dark mode design.
 
-### 🔲 Phase 4: Push Notifications & Integrations
+### 🔲 Phase 4: Zero-Install Distribution & Notifications
+- [ ] **Pure Web Store Extension**: In-browser content script reading `teams.microsoft.com` with zero Node.js/server requirement.
+- [ ] **1-Click Portable Runner**: Double-click `.bat` with embedded portable Node for frictionless classmate sharing.
 - [ ] Telegram / Discord bot webhooks for morning briefings.
-- [ ] One-click export to Google Calendar / Outlook for CTs and assignment deadlines.
 
 ---
 
