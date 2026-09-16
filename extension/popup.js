@@ -70,16 +70,24 @@ function formatRelativeTime(isoString) {
   return `${diffDays}d ago`;
 }
 
+// Tag → CSS modifier. Keyed on the exact strings classify() emits rather than
+// on substrings: `t.includes("ct")` matches any label containing those two
+// letters, so a future "Lecture" or "Practical" tag would silently render in
+// CT red. Anything unrecognised falls back to the neutral notice style.
+const TAG_CLASSES = {
+  "🧪 CT/Quiz":      "ct",
+  "📝 Exam":         "exam",
+  "🎤 Presentation": "presentation",
+  "🔄 Reschedule":   "reschedule",
+  "❌ Cancelled":    "cancelled",
+  "📌 Deadline":     "deadline",
+  "📊 Grades":       "grades",
+  "📢 Notice":       "notice",
+};
+
 function getTagClass(tag) {
   if (!tag) return "notice";
-  const t = tag.toLowerCase();
-  if (t.includes("ct") || t.includes("quiz")) return "ct";
-  if (t.includes("exam") || t.includes("final") || t.includes("midterm")) return "exam";
-  if (t.includes("deadline") || t.includes("due")) return "deadline";
-  if (t.includes("presentation")) return "presentation";
-  if (t.includes("grade") || t.includes("mark")) return "grades";
-  if (t.includes("reschedul") || t.includes("makeup")) return "reschedule";
-  return "notice";
+  return TAG_CLASSES[tag.trim()] || "notice";
 }
 
 function setView(viewName) {
@@ -214,9 +222,11 @@ function updateClassDropdown() {
   for (const c of rawDigestData.classes) {
     const totalItems = (c.noticesCount || 0) + (c.assignmentsCount || 0);
     const opt = document.createElement("option");
-    opt.value = c.className;
-    opt.textContent = `${c.className} (${totalItems})`;
-    if (c.className === currentSelection) opt.selected = true;
+    // Value is the raw class name: two sections of one course share a short
+    // name, so selecting by short name would filter to both.
+    opt.value = c.key || c.rawClassName || c.className;
+    opt.textContent = `${c.displayName || c.className} (${totalItems})`;
+    if (opt.value === currentSelection) opt.selected = true;
     classFilter.appendChild(opt);
   }
 }
@@ -230,6 +240,26 @@ function matchesTimeFilter(timestampIso, timeOption) {
   const hours = parseInt(timeOption, 10);
   const maxDiffMs = hours * 3600 * 1000;
   return Date.now() - postTime <= maxDiffMs;
+}
+
+/**
+ * Time filter for assignments.
+ *
+ * The dropdown is backward-looking ("Last 24h"), but a task is relevant when
+ * it is *near* now in either direction: something that went past due yesterday
+ * and something due tomorrow are both what you came to check. So the window is
+ * symmetric, ±N hours. An assignment with no parseable due date is always kept
+ * — dropping a task because we couldn't read its date is the wrong failure.
+ */
+function assignmentMatchesTimeFilter(assignment, timeOption) {
+  if (timeOption === "all") return true;
+  if (!assignment.dueDate) return true;
+
+  const due = new Date(assignment.dueDate).getTime();
+  if (isNaN(due)) return true;
+
+  const windowMs = parseInt(timeOption, 10) * 3600 * 1000;
+  return Math.abs(due - Date.now()) <= windowMs;
 }
 
 function matchesSearch(text, query) {
@@ -254,8 +284,9 @@ function applyFiltersAndRender() {
   classList.innerHTML = "";
 
   for (const c of rawDigestData.classes) {
-    // Check class filter
-    const matchesClassFilter = (selectedClass === "all" || c.className === selectedClass);
+    // Check class filter (against the raw key — see updateClassDropdown)
+    const classKey = c.key || c.rawClassName || c.className;
+    const matchesClassFilter = (selectedClass === "all" || classKey === selectedClass);
 
     // Filter Notices for this class
     const matchingNotices = (c.notices || []).filter((notice) => {
@@ -267,8 +298,10 @@ function applyFiltersAndRender() {
       return true;
     });
 
-    // Filter Assignments for this class
+    // Filter Assignments for this class — the SAME filters as notices, so the
+    // two halves of the view can't disagree about what's being shown.
     const matchingAssignments = (c.assignments || []).filter((assignment) => {
+      if (!assignmentMatchesTimeFilter(assignment, selectedTime)) return false;
       if (searchQuery) {
         const fullContent = `${assignment.title} ${assignment.details} ${assignment.tab}`.toLowerCase();
         return matchesSearch(fullContent, searchQuery);
@@ -276,10 +309,13 @@ function applyFiltersAndRender() {
       return true;
     });
 
+    // Class filter applies BEFORE the tab counts are accumulated — otherwise
+    // selecting one class leaves the All / Notices / Tasks badges showing
+    // totals for every class.
+    if (!matchesClassFilter) continue;
+
     globalTotalNotices += matchingNotices.length;
     globalTotalTasks   += matchingAssignments.length;
-
-    if (!matchesClassFilter) continue;
 
     // Check which sections to show based on activeTab
     const showNotices = (activeTab === "all" || activeTab === "notices") && matchingNotices.length > 0;
@@ -302,7 +338,10 @@ function applyFiltersAndRender() {
 
     const courseCode = document.createElement("span");
     courseCode.className = "course-code";
-    courseCode.textContent = c.className;
+    // displayName carries the section suffix when two teams share a course
+    // code, so "CSE 312 (V1)" and "CSE 312 (V2)" stay tellable apart.
+    courseCode.textContent = c.displayName || c.className;
+    courseCode.title = c.rawClassName || c.className;
     left.appendChild(courseCode);
 
     const badges = document.createElement("div");
@@ -330,9 +369,24 @@ function applyFiltersAndRender() {
     chevron.textContent = "▼";
     header.appendChild(chevron);
 
-    // Toggle collapse on click
-    header.addEventListener("click", () => {
-      card.classList.toggle("collapsed");
+    // Toggle collapse — reachable by keyboard, and announced to screen readers.
+    // A bare click handler on a div has neither.
+    header.setAttribute("role", "button");
+    header.setAttribute("tabindex", "0");
+    header.setAttribute("aria-expanded", "true");
+    header.setAttribute("aria-label", `Toggle ${c.displayName || c.className}`);
+
+    const toggleCollapse = () => {
+      const collapsed = card.classList.toggle("collapsed");
+      header.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    };
+
+    header.addEventListener("click", toggleCollapse);
+    header.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        toggleCollapse();
+      }
     });
 
     card.appendChild(header);
@@ -430,10 +484,10 @@ function applyFiltersAndRender() {
 
         item.appendChild(headerRow);
 
-        if (a.details) {
+        if (a.dueDate || a.details) {
           const dueText = document.createElement("div");
           dueText.className = "assignment-due-text";
-          dueText.textContent = a.details;
+          dueText.textContent = a.dueDate ? `📅 Due ${a.dueDate}${a.details ? ` · ${a.details}` : ""}` : a.details;
           item.appendChild(dueText);
         }
 
