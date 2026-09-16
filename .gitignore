@@ -10,14 +10,20 @@ auth*.json
 .env
 .env.*
 
-# Scraped data & output files
+# Scraped data & output files (contain real course names, instructors, dates)
 assignments.json
 notices.json
 digest.json
+digest.md
+digests/
 data/
 output/
 
+# Redacted sample IS committed:
+!digest.example.md
+
 # Debug artifacts, screenshots, and logs
+debug/
 *.png
 !extension/icons/*.png
 *.jpg

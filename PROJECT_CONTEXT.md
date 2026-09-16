@@ -15,7 +15,7 @@
   2. Assignments across Upcoming, Past Due, and Completed tabs *(Completed)*
   3. Channel Posts & Teacher Announcements from `General` channel *(Completed)*
   4. Rule-based Digest Builder — keyword + regex parsing into readable `digest.md` *(Completed)*
-  5. Storage & Deduplication Layer (SQLite via `better-sqlite3`, `db.js`, `teamspulse.db`) *(Completed)*
+  5. Storage & Deduplication Layer (SQLite via built-in `node:sqlite`, `db.js`, `teamspulse.db`) *(Completed)*
   6. Client Interface (Chrome/Edge Extension & Local Express API Server) *(Completed)*
   7. Zero-Install Distribution & Notification Channels *(Planned)*
 - **Planned Frontends**: Lightweight Chrome/Edge Extension (Manifest V3, localhost:3457 Express bridge) and optional 1-click portable desktop bundle / Web Store distribution.
@@ -25,7 +25,9 @@
 ## 2. Hard-Won Technical Decisions (Do Not Re-Try Dead Ends!)
 
 ### ❌ The Microsoft Graph API Dead End
-- **What was attempted**: Azure AD application registration (`MyClassApp`, Client ID `e4845e5c-f8ed-4628-8dc2-4fb577b5419b`, Tenant `d64fc2a1-e3c6-4a8a-8d65-4366182c78f6` - Green University of Bangladesh).
+- **What was attempted**: Azure AD application registration (`MyClassApp`) against the
+  university tenant. (Client ID and tenant ID intentionally omitted - they identify the
+  author's institution and app registration, and this file is public.)
 - **Why it failed**:
   - The university tenant enforces a strict blanket policy: **"Users cannot consent to apps"**. Even scopes labeled "Admin consent required: No" (like `User.Read`, `Calendars.Read`) hit an immediate *"Need admin approval"* block screen.
   - Academic scopes (`EduAssignments.Read`, `EduRoster.Read`) require tenant admin approval, which IT departments rarely grant to student developers.
@@ -45,14 +47,17 @@
 ### Architecture
 - **File**: `db.js` — single-responsibility module, owns all SQLite interaction.
 - **Database**: `teamspulse.db` (SQLite, WAL mode) — never committed (listed in `.gitignore`).
-- **Dependency**: `better-sqlite3` (synchronous Node.js binding, no async complexity).
+- **Dependency**: none - uses Node's built-in `node:sqlite` (`DatabaseSync`).
+  Requires **Node 24+** (the module does not exist before 22.5 and warns on 22.x).
+  `better-sqlite3` is NOT used and is not in `package.json`.
 
 ### Schema — `posts` table
 
 | Column | Type | Description |
 |---|---|---|
-| `hash` | TEXT PRIMARY KEY | `sha256(className + "\0" + timestampIso + "\0" + body[:500])` |
-| `class_name` | TEXT | Source class (for per-class queries in future steps) |
+| `hash` | TEXT PRIMARY KEY | `sha256(rawClassName \0 author \0 timestampIso \0 subject \0 body[:500])` - subject and author are part of the tuple because two posts in one class at one minute with the same body but different subjects are two posts, and `INSERT OR IGNORE` would silently drop one. Versioned via `PRAGMA user_version`. |
+| `class_name` | TEXT | **Raw** class name - never the shortened display label |
+| `surfaced` | INTEGER | 1 = appeared in a digest (suppresses future runs); 0 = scraped but filtered out as not noteworthy. Only surfaced posts count as seen, so loosening the classifier can still surface the rest. |
 | `timestamp_iso` | TEXT | ISO 8601 post timestamp (may be null if Teams didn't parse it) |
 | `author` | TEXT | Post author |
 | `snippet` | TEXT | First 120 chars of body |
@@ -85,7 +90,7 @@ Because Manifest V3 Chrome extensions cannot access the local filesystem or SQLi
 [Chrome Extension popup]
         ↕ fetch("http://localhost:3457/api/...")
 [Local Express API server — server.js]
-        ↕ better-sqlite3 / JSON reads
+        ↕ node:sqlite / JSON reads
 [teamspulse.db + notices.json + assignments.json + digest-utils.js]
 ```
 
@@ -146,7 +151,9 @@ Because Manifest V3 Chrome extensions cannot access the local filesystem or SQLi
   - Title: `.fui-CardHeader__header`
   - Due Details: `.fui-CardHeader__description`
   - Status Pill: `.fui-CardHeader__action`
-  - Card ID attribute contains a stable GUID (ideal for database deduplication).
+  - Card ID attribute contains a stable GUID. **Implemented**: `teams.js` reads it into
+    `assignmentId` (see `extractGuid`), alongside a `dueDate` parsed from the card's
+    `datetime`/`title` attribute or its description text.
 
 ### 3.5. Empty Class State Tolerance (The CSE 304 Fix)
 - Classes with 0 assignments never render the "Upcoming" / "Past due" / "Completed" tabs; they display `"No assignments in this class yet"`.
@@ -182,7 +189,10 @@ Because Manifest V3 Chrome extensions cannot access the local filesystem or SQLi
   - Container: `[data-tid="response-surface"]`.
   - Header: `[data-tid="reply-message-header"]`.
   - Body: `[data-tid="message-body"]`.
-- **Channel Tag Leak Trap**: Teams often appends the channel or class name with non-breaking spaces (`\u00a0`) to the message footer. Normalize `[\u00a0\s]+` regex before stripping `className` from the body.
+- **Channel Tag Leak Trap**: Teams often appends the channel or class name with non-breaking spaces (`\u00a0`) to the message footer.
+  **Implemented** in `scrape-posts.js` (`extractPosts`): whitespace is normalised with `[\u00a0\s]+` FIRST,
+  then only a **trailing** occurrence is stripped with an anchored regex. A global `split().join("")` also
+  deletes the course code out of the middle of legitimate sentences ("CSE 312 lab will be held...").
 
 ---
 
@@ -196,7 +206,11 @@ Because Manifest V3 Chrome extensions cannot access the local filesystem or SQLi
   - `CSE 312`: 7 Past due, 2 Completed
   - `MAT 103`: 1 Past due
   - `CSE 304`: 0 (detected empty state instantly)
-- **Channel Notices Extracted** (`notices.json`):
+- **Channel Notices Extracted** (`notices.json`) - NOTE: the uniform "4 posts" below was a
+  hydration ceiling, not a real count. Teams' virtual scroller only renders what is in the
+  runway. `scrape-posts.js` now scrolls back (`--scrollback`, default 5 passes), so these
+  numbers should be re-measured.
+
   - `CSE 303`: 0 (clean empty channel read)
   - `PHY 104`: 4 posts (class reschedule notices, lab announcements, WhatsApp form)
   - `CSE 311`: 4 posts (extra classes, Zoom links, presentation notices)
@@ -207,7 +221,10 @@ Because Manifest V3 Chrome extensions cannot access the local filesystem or SQLi
 - **Outputs**: Clean JSON saved to `assignments.json` and `notices.json`. Readable digest in `digest.md`.
 - **Executables**:
   - `npm run scrape` (`teams.js`): Unified single-pass scraper for both assignments & notices.
-  - `npm run scrape:posts` (`scrape-posts.js`): Dedicated channel notices & announcements scraper with 24–48h filtering support.
+  - `npm run scrape:posts` (`scrape-posts.js`): Dedicated channel notices & announcements scraper.
+    **Implemented**: `--hours N` applies the window (via `filterRecentPosts`, which now lives in
+    `digest-utils.js`); `--scrollback N` walks the virtual list upward for older history;
+    `--headed` and `--class` are available on both scrapers.
   - `node build-digest.js`: Rule-based digest builder — reads `notices.json` + `assignments.json`, outputs `digest.md`.
 
 ---
@@ -248,4 +265,31 @@ flowchart TD
 2. **Never guess selectors**: Run small diagnostic inspection scripts and view screenshots before modifying scrapers.
 3. **Never commit sensitive files**: Double-check `git status` to ensure `auth-teams.json`, `assignments.json`, and debug screenshots are never staged.
 4. **Update this document**: Whenever you solve a new selector problem, add a feature, or complete a roadmap milestone, document it here immediately.
+5. **Verify before trusting this file.** Instructions elsewhere tell agents to read
+   this document and act on it without re-checking. That makes drift here more
+   expensive than drift anywhere else in the repo: a wrong line is believed and
+   built on. Four sections of this file were once ahead of the code - they
+   described the nbsp normalisation, a `better-sqlite3` dependency, hour-filtering
+   and assignment-GUID dedup as done when none were in the source.
+   **Mark things as "Intended" until they are in the code, then change the word to
+   "Implemented" and name the function.** If you find a claim here you cannot find
+   in the source, fix the document in the same change.
+6. **The dedup layer is the most conservative code in this repo.** It decides what
+   the user will never see again. When in doubt, re-show a post: that is a minor
+   annoyance, whereas suppressing one loses a CT date permanently. Concretely -
+   never key data by `shortClassName()` (it collapses course sections), never
+   narrow the hash tuple, and never mark a post seen before it has actually been
+   surfaced.
+
+---
+
+## 7. Test Coverage
+
+`npm test` runs `node --test` over `test/`. `digest-utils.js` is seven pure
+functions with no dependencies and is where the date/time parsing bugs live -
+it is the highest-leverage test target in the project. Current coverage:
+`extractDate` (including impossible dates, US-format fallback, ambiguous month
+words, leap years), `extractTime` (12h, 24h, ranges, dot separators),
+`classify`, `isNoteworthy`, `filterRecentPosts`, `truncate`, `escapeCell`,
+`shortClassName` and `sectionLabel`.
 

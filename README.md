@@ -44,7 +44,7 @@ flowchart LR
 - [x] **Storage & Deduplication**: SQLite (`teamspulse.db`) stores a SHA-256 fingerprint for every processed post. On the next run, already-seen posts are silently skipped — only genuinely new content appears in the digest.
 - [x] **Resilient UI Selectors**: Bypasses unstable Fluent UI atomic class names by anchoring to semantic `data-testid` / `data-test` / ARIA attributes.
 - [ ] **AI-Powered Parser**: Gemini Flash to extract structured dates, rooms, and syllabi from free-text posts.
-- [ ] **Chrome / Edge Extension**: Quick popup showing today's deadlines, upcoming CTs, and new notices.
+- [x] **Chrome / Edge Extension**: Quick popup showing today's deadlines, upcoming CTs, and new notices (served by the local API on port 3457).
 - [ ] **Telegram Bot**: Morning briefing push notifications.
 
 ---
@@ -52,7 +52,9 @@ flowchart LR
 ## 🚀 Quickstart
 
 ### 1. Prerequisites
-- **Node.js** v18 or higher
+- **Node.js** v24 or higher — the dedup store uses the built-in `node:sqlite`
+  module, which does not exist before Node 22.5 and still prints an
+  `ExperimentalWarning` on 22.x. There is no `better-sqlite3` dependency.
 - **npm**
 
 ### 2. Installation
@@ -60,8 +62,13 @@ flowchart LR
 ```bash
 git clone https://github.com/Sa-Alfy/teampulse.git
 cd teampulse
-npm install
-npx playwright install chromium
+npm install   # postinstall downloads the Chromium build Playwright needs
+```
+
+If you skipped the postinstall (or it failed behind a proxy), run it yourself:
+
+```bash
+npm run setup
 ```
 
 ### 3. One-Time Login (Session Capture)
@@ -80,11 +87,31 @@ npm run login
 ### 4. Daily Workflow
 
 ```bash
-npm run scrape    # Pull fresh data from Teams  → notices.json + assignments.json
-npm run digest    # Build the briefing           → digest.md  (new posts only)
+npm run daily     # scrape + digest in one step
 ```
 
-That's it. Open `digest.md` to see only what changed since your last run.
+Or run the two halves separately:
+
+```bash
+npm run scrape    # Pull fresh data from Teams  → notices.json + assignments.json
+npm run digest    # Build the briefing           → digest.md
+```
+
+Open `digest.md`: each class shows **New since last run** first, then
+**Still standing** so the briefing is still readable an hour later. Every run is
+also archived to `digests/YYYY-MM-DD.md`.
+
+#### Useful flags
+
+```bash
+npm run scrape -- --headed              # watch the browser work (debugging)
+npm run scrape -- --class "CSE 312"     # scrape one class only
+npm run scrape:posts -- --hours 48      # only posts from the last 48h
+npm run scrape:posts -- --scrollback 20 # dig further back through channel history
+npm run digest -- --hours 24            # build a digest from the last 24h only
+```
+
+Run the unit tests for the parsing rules with `npm test`.
 
 ---
 
@@ -98,7 +125,7 @@ That's it. Open `digest.md` to see only what changed since your last run.
     "className": "Summer_2026_CSE 312 (V1)_232_D4",
     "posts": [
       {
-        "author": "Dr. Rahman",
+        "author": "A. Instructor",
         "isAnnouncement": true,
         "subject": "CT-2 Schedule",
         "body": "CT-2 will be held on 20.09.2025 at 9:30 AM.",
@@ -117,25 +144,44 @@ A Markdown table grouped by class, showing only posts that are new since the las
 # TeamsPulse Digest
 
 _Generated 2025-09-15T… — rule-based, no AI involved._
-_3 new post(s) across 5 class(es); 23 duplicate(s) suppressed._
+_3 new since last run; 23 still standing across 5 class(es)._
 
-## CSE 312
+## Summer_2026_CSE 312 (V1)_232_D4
 
-### Notices & Announcements
+### 🆕 New since last run
 
 | Date       | Time     | Type        | Summary                         | Source               |
 |------------|----------|-------------|---------------------------------|----------------------|
-| 2025-09-20 | 9:30 AM  | 🧪 CT/Quiz  | CT-2 will be held on 20.09…     | Dr. Rahman, Sep 14   |
+| 2025-09-20 | 9:30 AM  | 🧪 CT/Quiz  | CT-2 will be held on 20.09…     | A. Instructor, Sep 14 |
 ```
+
+A redacted sample lives in [`digest.example.md`](digest.example.md). Your real
+`digest.md` and `digests/` are gitignored — they carry your actual course names,
+instructors and deadlines.
 
 ### `teamspulse.db` — deduplication store
 
-SQLite database (excluded from git). Each post is stored by its SHA-256 hash after first being processed. Queryable:
+SQLite database (excluded from git), written through Node's built-in
+`node:sqlite` — there is no `better-sqlite3` dependency.
+
+Each post is fingerprinted with
+`sha256(rawClassName, author, timestamp, subject, body[:500])`. All five fields
+matter: drop any of them and two genuinely different posts collapse into one,
+and the loser is suppressed forever.
+
+Posts are recorded in two states. `surfaced = 1` means the post actually
+appeared in a digest and will be suppressed next run; `surfaced = 0` means it
+was scraped but filtered out as not noteworthy. Only surfaced posts count as
+seen, so loosening the classifier later can still bring the others through.
 
 ```bash
-# See all stored posts
-node -e "const D=require('better-sqlite3')('teamspulse.db'); console.table(D.prepare('SELECT class_name,author,snippet,seen_at FROM posts ORDER BY seen_at DESC LIMIT 20').all())"
+# See all surfaced posts
+node -e "const {DatabaseSync}=require('node:sqlite'); const d=new DatabaseSync('teamspulse.db',{readOnly:true}); console.table(d.prepare('SELECT class_name,author,snippet,seen_at FROM posts WHERE surfaced=1 ORDER BY seen_at DESC LIMIT 20').all())"
 ```
+
+> The hash tuple is versioned (`PRAGMA user_version`). Changing it drops the old
+> table on next run: previously-seen posts reappear once, which is the safe
+> direction — re-showing a notice is recoverable, hiding one is not.
 
 ---
 

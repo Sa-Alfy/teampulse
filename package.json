@@ -1,14 +1,18 @@
 {
   "name": "teamspulse",
-  "version": "0.1.0",
+  "version": "0.5.0",
   "description": "Automated academic dashboard and briefing engine for students using Microsoft Teams",
   "main": "teams.js",
   "scripts": {
+    "setup": "playwright install chromium",
+    "postinstall": "playwright install chromium",
     "login": "node login-teams.js",
     "scrape": "node teams.js",
     "scrape:posts": "node scrape-posts.js",
     "digest": "node build-digest.js",
+    "daily": "npm run scrape && npm run digest",
     "server": "node server.js",
+    "test": "node --test",
     "start": "node teams.js"
   },
   "keywords": [
@@ -26,8 +30,10 @@
     "url": "https://github.com/Sa-Alfy/teampulse.git"
   },
   "dependencies": {
-    "better-sqlite3": "^13.0.3",
     "express": "^5.2.1",
     "playwright": "^1.63.0"
+  },
+  "engines": {
+    "node": ">=24.0.0"
   }
 }
