@@ -12,30 +12,56 @@
 const express  = require("express");
 const fs       = require("fs");
 const path     = require("path");
-const Database = require("better-sqlite3");
+const { DatabaseSync } = require("node:sqlite");
 
-const { isNoteworthy, classify, extractDate, extractTime, truncate, shortClassName } = require("./digest-utils");
+const {
+  isNoteworthy,
+  classify,
+  extractDate,
+  extractTime,
+  truncate,
+  shortClassName,
+  sectionLabel,
+} = require("./digest-utils");
+
+// hashPost is imported, never reimplemented — the fingerprint tuple lives in
+// exactly one place, so changing it can't leave this file computing stale
+// hashes that silently mark every post as new.
+const { hashPost } = require("./db");
 
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 
-const PORT           = 3457;
-const NOTICES_FILE   = path.join(__dirname, "notices.json");
+const PORT             = 3457;
+const NOTICES_FILE     = path.join(__dirname, "notices.json");
 const ASSIGNMENTS_FILE = path.join(__dirname, "assignments.json");
-const DB_PATH        = path.join(__dirname, "teamspulse.db");
+const DB_PATH          = path.join(__dirname, "teamspulse.db");
+
+// A post counts as "new" for the UI badge if it was surfaced within this
+// window. Defining newness by TIME rather than by absence from the table means
+// the CLI digest and the extension agree: running `npm run digest` no longer
+// permanently extinguishes the NEW pill.
+const NEW_WINDOW_HOURS = 24;
+const MAX_WINDOW_HOURS = 168; // 7 days
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Open the SQLite DB, or return null if it doesn't exist yet. */
+/**
+ * Open the SQLite DB read-only, or return null if it doesn't exist yet.
+ *
+ * NOTE: a read-only connection cannot recover a hot WAL. This works because
+ * build-digest.js closes cleanly and checkpoints on exit; if a writer crashes
+ * mid-run, the leftover -wal may make this open fail (we degrade to null and
+ * serve empty stats rather than throwing). Deleting teamspulse.db-wal after a
+ * crashed scrape is the manual recovery.
+ */
 function openDb() {
   if (!fs.existsSync(DB_PATH)) return null;
   try {
-    const db = new Database(DB_PATH, { readonly: true });
-    db.pragma("journal_mode = WAL");
-    return db;
+    return new DatabaseSync(DB_PATH, { readOnly: true });
   } catch {
     return null;
   }
@@ -51,29 +77,38 @@ function readJson(filePath) {
   }
 }
 
+/** Clamp an hours query param into [1, MAX_WINDOW_HOURS]. */
+function clampHours(raw, fallback) {
+  const parsed = parseInt(raw, 10);
+  const n = Number.isFinite(parsed) ? parsed : fallback;
+  return Math.min(Math.max(n, 1), MAX_WINDOW_HOURS);
+}
+
+/** Does the posts table exist on this connection? */
+function hasPostsTable(db) {
+  try {
+    return !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='posts'").get();
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Transform a raw post into the shape the extension expects.
  *
- * @param {string} rawClassName
- * @param {object} post
- * @returns {object}
- */
-/**
- * Transform a raw post into the shape the extension expects.
- *
- * @param {string} rawClassName
+ * @param {string} rawClassName — section-specific identity, never the short label
  * @param {object} post
  * @param {boolean} isNew
  * @returns {object}
  */
 function transformPost(rawClassName, post, isNew = false) {
-  const combined   = `${post.subject || ""} ${post.body || ""}`.trim();
-  const postYear   = post.timestampIso
+  const combined = `${post.subject || ""} ${post.body || ""}`.trim();
+  const postYear = post.timestampIso
     ? new Date(post.timestampIso).getFullYear()
     : new Date().getFullYear();
-  const date       = extractDate(combined, postYear) || extractDate(post.timestampFull, postYear);
-  const time       = extractTime(combined);
-  const tag        = classify(combined);
+  const date = extractDate(combined, postYear) || extractDate(post.timestampFull, postYear);
+  const time = extractTime(combined);
+  const tag  = classify(combined);
 
   // Build a rich, informative summary
   let summaryText = "";
@@ -91,13 +126,11 @@ function transformPost(rawClassName, post, isNew = false) {
     summaryText = sub || bdy || "";
   }
 
-  const summary = truncate(summaryText, 140);
-
   return {
     date:              date || null,
     time:              time || null,
     tag,
-    summary,
+    summary:           truncate(summaryText, 140),
     subject:           post.subject || null,
     bodySnippet:       truncate(bdy, 220),
     isAnnouncement:    !!post.isAnnouncement,
@@ -117,15 +150,19 @@ function transformPost(rawClassName, post, isNew = false) {
 
 const app = express();
 
-// CORS — allow Chrome extension origins and localhost
+// CORS — allow the extension and localhost only.
+//
+// There is deliberately NO wildcard fallback. curl and other non-browser
+// clients send no Origin header and need no CORS header at all, so echoing
+// "*" would have bought them nothing while handing every website you happen
+// to have open permission to read your course list.
 app.use((req, res, next) => {
   const origin = req.headers.origin || "";
   if (origin.startsWith("chrome-extension://") || origin.startsWith("http://localhost")) {
     res.setHeader("Access-Control-Allow-Origin", origin);
-  } else {
-    // Still allow requests with no Origin header (curl, etc.)
-    res.setHeader("Access-Control-Allow-Origin", "*");
   }
+  // The response body varies by Origin, so caches must key on it.
+  res.setHeader("Vary", "Origin");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   if (req.method === "OPTIONS") return res.sendStatus(204);
@@ -159,11 +196,11 @@ app.get("/", (_req, res) => {
   <h1>⚡ TeamsPulse API</h1>
   <div class="status"><span class="pulse"></span> Running on port 3457</div>
   <p>The backend server is operating properly. It provides JSON data to the TeamsPulse Chrome/Edge extension.</p>
-  
+
   <h3>Available Endpoints:</h3>
   <ul>
     <li><a href="/api/ping">/api/ping</a> — Health check</li>
-    <li><a href="/api/status">/api/status</a> — Database status & post count</li>
+    <li><a href="/api/status">/api/status</a> — Database status &amp; post count</li>
     <li><a href="/api/digest">/api/digest</a> — Formatted briefing data</li>
     <li><a href="/api/recent?hours=48">/api/recent?hours=48</a> — Recent posts</li>
   </ul>
@@ -186,7 +223,6 @@ app.get("/api/ping", (_req, res) => {
 // GET /api/status — aggregate stats from teamspulse.db
 // ---------------------------------------------------------------------------
 app.get("/api/status", (_req, res) => {
-  const db = openDb();
   let lastScrape = null;
   try {
     if (fs.existsSync(NOTICES_FILE)) {
@@ -194,34 +230,49 @@ app.get("/api/status", (_req, res) => {
     }
   } catch { /* ignore */ }
 
-  if (!db) {
-    return res.json({ ok: true, totalSeen: 0, lastRun: null, lastScrape, serverTime: new Date().toISOString() });
-  }
+  const emptyStatus = () => ({
+    ok: true,
+    totalSeen: 0,
+    totalRecorded: 0,
+    lastRun: null,
+    lastScrape,
+    serverTime: new Date().toISOString(),
+  });
+
+  const db = openDb();
+  if (!db) return res.json(emptyStatus());
 
   try {
-    const tableExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='posts'").get();
-    if (!tableExists) {
+    if (!hasPostsTable(db)) {
       db.close();
-      return res.json({ ok: true, totalSeen: 0, lastRun: null, lastScrape, serverTime: new Date().toISOString() });
+      return res.json(emptyStatus());
     }
-    const { total } = db.prepare("SELECT COUNT(*) AS total FROM posts").get();
-    const { lastRun } = db.prepare("SELECT MAX(seen_at) AS lastRun FROM posts").get();
+    const { surfaced, recorded } = db
+      .prepare("SELECT SUM(surfaced) AS surfaced, COUNT(*) AS recorded FROM posts")
+      .get();
+    const { lastRun } = db.prepare("SELECT MAX(seen_at) AS lastRun FROM posts WHERE surfaced = 1").get();
     db.close();
     res.json({
       ok: true,
-      totalSeen: total || 0,
+      totalSeen: surfaced || 0,
+      totalRecorded: recorded || 0,
       lastRun: lastRun || null,
       lastScrape,
       serverTime: new Date().toISOString(),
     });
-  } catch (err) {
+  } catch {
     db.close();
-    res.json({ ok: true, totalSeen: 0, lastRun: null, lastScrape, serverTime: new Date().toISOString() });
+    res.json(emptyStatus());
   }
 });
 
 // ---------------------------------------------------------------------------
 // GET /api/digest — digest data for the popup's main view
+//
+// Everything is grouped by RAW class name. Two sections of one course
+// ("CSE 312 (V1)" and "CSE 312 (V2)") are two separate teams with separate
+// announcements; collapsing them by short name silently dropped one section's
+// notices entirely. The short name is a display label and nothing else.
 // ---------------------------------------------------------------------------
 app.get("/api/digest", (req, res) => {
   const notices     = readJson(NOTICES_FILE);
@@ -229,107 +280,111 @@ app.get("/api/digest", (req, res) => {
 
   if (!notices && !assignments) {
     return res.json({
-      generatedAt:   new Date().toISOString(),
-      newPostCount:  0,
-      skippedCount:  0,
-      classes:       [],
-      noDataYet:     true,
+      generatedAt:  new Date().toISOString(),
+      newPostCount: 0,
+      skippedCount: 0,
+      classes:      [],
+      noDataYet:    true,
     });
   }
 
-  const db = openDb();
-  let hasPostsTable = false;
-  let stmtExists = null;
+  const newWindowHours = clampHours(req.query.newHours, NEW_WINDOW_HOURS);
+  const newCutoffIso = new Date(Date.now() - newWindowHours * 3600e3).toISOString();
 
-  if (db) {
+  const db = openDb();
+  let stmtSeenAt = null;
+
+  if (db && hasPostsTable(db)) {
     try {
-      const tableCheck = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='posts'").get();
-      if (tableCheck) {
-        hasPostsTable = true;
-        stmtExists = db.prepare("SELECT 1 FROM posts WHERE hash = ?");
-      }
+      stmtSeenAt = db.prepare("SELECT seen_at FROM posts WHERE hash = ? AND surfaced = 1");
     } catch { /* ignore */ }
   }
 
-  const crypto = require("crypto");
-  function hashPost(className, post) {
-    const ts   = post.timestampIso || post.timestampFull || "";
-    const body = (post.body || "").slice(0, 500);
-    const raw  = `${className}\0${ts}\0${body}`;
-    return crypto.createHash("sha256").update(raw, "utf8").digest("hex");
-  }
-
-  function isPostNew(className, post) {
-    if (!hasPostsTable || !stmtExists) return true;
+  /**
+   * "New" means surfaced recently, not absent from the table. Both seen_at and
+   * the cutoff are JS ISO strings, so the comparison is like-for-like.
+   */
+  function isPostNew(rawClassName, post) {
+    if (!stmtSeenAt) return true; // no DB yet — nothing has been seen
     try {
-      const hash = hashPost(className, post);
-      const row = stmtExists.get(hash);
-      return !row; // new if not found in db
+      const row = stmtSeenAt.get(hashPost(rawClassName, post));
+      if (!row) return true;                 // never surfaced
+      return (row.seen_at || "") > newCutoffIso;
     } catch {
       return true;
     }
+  }
+
+  // ── Index assignments by raw class name ───────────────────────────────────
+  const assignmentsByRaw = {};
+  for (const entry of (assignments || [])) {
+    const raw = entry.className;
+    if (!assignmentsByRaw[raw]) assignmentsByRaw[raw] = [];
+    for (const a of (entry.assignments || [])) {
+      if (a.tab === "Upcoming" || a.tab === "Past due") {
+        assignmentsByRaw[raw].push({
+          ...a,
+          className: shortClassName(raw),
+          rawClassName: raw,
+        });
+      }
+    }
+  }
+
+  // ── Index notices by raw class name ───────────────────────────────────────
+  const noticesByRaw = {};
+  for (const classEntry of (notices || [])) {
+    noticesByRaw[classEntry.className] = classEntry;
+  }
+
+  const allRawNames = new Set([
+    ...Object.keys(noticesByRaw),
+    ...Object.keys(assignmentsByRaw),
+  ]);
+
+  // A short name shared by more than one raw name needs its section shown, or
+  // the popup presents two different teams under one indistinguishable label.
+  const shortNameCounts = {};
+  for (const raw of allRawNames) {
+    const short = shortClassName(raw);
+    shortNameCounts[short] = (shortNameCounts[short] || 0) + 1;
   }
 
   let totalNoteworthy = 0;
   let newPostCount    = 0;
   let skippedCount    = 0;
 
-  // Build per-class assignments indexed by normalized short class name
-  const assignmentsByClass = {};
-  for (const entry of (assignments || [])) {
-    const key = shortClassName(entry.className);
-    if (!assignmentsByClass[key]) assignmentsByClass[key] = [];
-
-    for (const a of (entry.assignments || [])) {
-      if (a.tab === "Upcoming" || a.tab === "Past due") {
-        assignmentsByClass[key].push({
-          ...a,
-          className: key,
-          rawClassName: entry.className,
-        });
-      }
-    }
-  }
-
-  // Collect all unique class names across notices and assignments
-  const allClassesSet = new Set();
-  const noticesByClass = {};
-  for (const classEntry of (notices || [])) {
-    const key = shortClassName(classEntry.className);
-    allClassesSet.add(key);
-    noticesByClass[key] = classEntry;
-  }
-  for (const key of Object.keys(assignmentsByClass)) {
-    allClassesSet.add(key);
-  }
-
   const classes = [];
-  for (const shortName of Array.from(allClassesSet).sort()) {
-    const classEntry = noticesByClass[shortName];
+  for (const raw of Array.from(allRawNames).sort()) {
+    const classEntry = noticesByRaw[raw];
     const transformedNotices = [];
 
     if (classEntry && classEntry.posts) {
       for (const post of classEntry.posts) {
         if (!isNoteworthy(post)) continue;
         totalNoteworthy++;
-        const isNew = isPostNew(classEntry.className, post);
-        if (isNew) {
-          newPostCount++;
-        } else {
-          skippedCount++;
-        }
-        transformedNotices.push(transformPost(classEntry.className, post, isNew));
+        const isNew = isPostNew(raw, post);
+        if (isNew) newPostCount++;
+        else skippedCount++;
+        transformedNotices.push(transformPost(raw, post, isNew));
       }
     }
 
-    const classAssignments = assignmentsByClass[shortName] || [];
+    const classAssignments = assignmentsByRaw[raw] || [];
 
     // Skip empty classes that have neither notices nor assignments
     if (transformedNotices.length === 0 && classAssignments.length === 0) continue;
 
+    const short = shortClassName(raw);
+    const section = sectionLabel(raw);
+    const displayName = shortNameCounts[short] > 1 && section ? `${short} (${section})` : short;
+
     classes.push({
-      className:        shortName,
-      rawClassName:     classEntry ? classEntry.className : shortName,
+      key:              raw,          // stable identity for filtering
+      className:        short,        // course code, for grouping/labels
+      displayName,                    // what the popup should print
+      section:          section || null,
+      rawClassName:     raw,
       noticesCount:     transformedNotices.length,
       assignmentsCount: classAssignments.length,
       notices:          transformedNotices,
@@ -340,7 +395,8 @@ app.get("/api/digest", (req, res) => {
   if (db) db.close();
 
   res.json({
-    generatedAt:     new Date().toISOString(),
+    generatedAt: new Date().toISOString(),
+    newWindowHours,
     totalNoteworthy,
     newPostCount,
     skippedCount,
@@ -352,32 +408,36 @@ app.get("/api/digest", (req, res) => {
 // GET /api/recent?hours=48 — posts from teamspulse.db within N hours
 // ---------------------------------------------------------------------------
 app.get("/api/recent", (req, res) => {
-  const hours = Math.min(parseInt(req.query.hours, 10) || 48, 168); // cap at 7 days
+  const hours = clampHours(req.query.hours, 48);
   const db = openDb();
-  if (!db) {
-    return res.json({ posts: [] });
-  }
+  if (!db) return res.json({ posts: [], hours });
 
   try {
-    const tableCheck = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='posts'").get();
-    if (!tableCheck) {
+    if (!hasPostsTable(db)) {
       db.close();
-      return res.json({ posts: [] });
+      return res.json({ posts: [], hours });
     }
+
+    // The cutoff is built in JS so both sides of the comparison are ISO-8601.
+    // SQLite's datetime('now', ...) renders "YYYY-MM-DD HH:MM:SS" — a space
+    // where seen_at has a "T" — and string-comparing the two diverges at
+    // character 11, letting through everything from the cutoff's whole day.
+    const cutoff = new Date(Date.now() - hours * 3600e3).toISOString();
 
     const rows = db
       .prepare(
         `SELECT class_name, author, snippet, timestamp_iso, seen_at
          FROM posts
-         WHERE seen_at > datetime('now', ? )
+         WHERE surfaced = 1 AND seen_at > ?
          ORDER BY seen_at DESC`
       )
-      .all(`-${hours} hours`);
+      .all(cutoff);
 
     db.close();
 
     const posts = rows.map((r) => ({
       className:    shortClassName(r.class_name || ""),
+      rawClassName: r.class_name || null,
       author:       r.author,
       snippet:      r.snippet,
       timestampIso: r.timestamp_iso,
@@ -385,18 +445,47 @@ app.get("/api/recent", (req, res) => {
       tag:          classify(r.snippet || ""),
     }));
 
-    res.json({ posts });
-  } catch (err) {
+    res.json({ posts, hours, cutoff });
+  } catch {
     db.close();
-    res.json({ posts: [] });
+    res.json({ posts: [], hours });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Errors — clients expect JSON, so don't hand them Express's HTML 500 page.
+// ---------------------------------------------------------------------------
+app.use((_req, res) => {
+  res.status(404).json({ ok: false, error: "Not found" });
+});
+
+app.use((err, _req, res, _next) => {
+  console.error("❌ Unhandled error:", err);
+  res.status(500).json({ ok: false, error: "Internal server error" });
 });
 
 // ---------------------------------------------------------------------------
 // Start
 // ---------------------------------------------------------------------------
-app.listen(PORT, "127.0.0.1", () => {
+const server = app.listen(PORT, "127.0.0.1");
+
+// Announce success from the 'listening' event, not from listen()'s callback —
+// so a failed bind never prints "running on ..." just above its own error.
+server.on("listening", () => {
   console.log(`⚡ TeamsPulse API server running on http://localhost:${PORT}`);
   console.log(`   Press Ctrl+C to stop.`);
 });
 
+server.on("error", (err) => {
+  if (err.code === "EADDRINUSE") {
+    console.error(`❌ Port ${PORT} is already in use — is the server already running?`);
+    console.error(`   Check http://localhost:${PORT}/api/ping, or stop the other process.`);
+  } else if (err.code === "EACCES") {
+    console.error(`❌ Not allowed to bind port ${PORT}.`);
+  } else {
+    console.error("❌ Server failed to start:", err);
+  }
+  process.exitCode = 1;
+});
+
+module.exports = app;
