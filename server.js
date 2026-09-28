@@ -84,6 +84,16 @@ function clampHours(raw, fallback) {
   return Math.min(Math.max(n, 1), MAX_WINDOW_HOURS);
 }
 
+/** Determine health status: "stale" if lastScrape is missing or older than 36h from serverTime; "ok" otherwise. */
+function computeHealth(lastScrape, serverTime) {
+  if (!lastScrape) return "stale";
+  const scrapeMs = new Date(lastScrape).getTime();
+  const serverMs = new Date(serverTime).getTime();
+  if (Number.isNaN(scrapeMs) || Number.isNaN(serverMs)) return "stale";
+  return (serverMs - scrapeMs) > 36 * 3600e3 ? "stale" : "ok";
+}
+
+
 /** Does the posts table exist on this connection? */
 function hasPostsTable(db) {
   try {
@@ -230,13 +240,17 @@ app.get("/api/status", (_req, res) => {
     }
   } catch { /* ignore */ }
 
+  const serverTime = new Date().toISOString();
+  const health = computeHealth(lastScrape, serverTime);
+
   const emptyStatus = () => ({
     ok: true,
+    health,
     totalSeen: 0,
     totalRecorded: 0,
     lastRun: null,
     lastScrape,
-    serverTime: new Date().toISOString(),
+    serverTime,
   });
 
   const db = openDb();
@@ -254,11 +268,12 @@ app.get("/api/status", (_req, res) => {
     db.close();
     res.json({
       ok: true,
+      health,
       totalSeen: surfaced || 0,
       totalRecorded: recorded || 0,
       lastRun: lastRun || null,
       lastScrape,
-      serverTime: new Date().toISOString(),
+      serverTime,
     });
   } catch {
     db.close();

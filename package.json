@@ -11,6 +11,7 @@
     "scrape:posts": "node scrape-posts.js",
     "digest": "node build-digest.js",
     "daily": "npm run scrape && npm run digest",
+    "watchdog": "node scripts/daily-watchdog.js",
     "server": "node server.js",
     "test": "node --test",
     "start": "node teams.js"
