@@ -126,6 +126,17 @@ function setConnectionStatus(isOnline) {
   }
 }
 
+function updateBadge(newPostCount) {
+  const count = typeof newPostCount === "number" ? newPostCount : 0;
+  const text = count > 0 ? String(count) : "";
+  if (typeof chrome !== "undefined" && chrome.action && typeof chrome.action.setBadgeText === "function") {
+    chrome.action.setBadgeText({ text });
+    if (text && typeof chrome.action.setBadgeBackgroundColor === "function") {
+      chrome.action.setBadgeBackgroundColor({ color: "#6264a7" });
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Data Fetching & Sync
 // ---------------------------------------------------------------------------
@@ -162,6 +173,7 @@ async function loadData(silent = false) {
     rawDigestData = digest;
     lastSyncTimestamp = Date.now();
     setConnectionStatus(true);
+    updateBadge(rawDigestData ? rawDigestData.newPostCount : 0);
 
     updateHeaderMeta();
     updateClassDropdown();
