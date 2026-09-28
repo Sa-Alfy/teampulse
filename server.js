@@ -154,6 +154,79 @@ function transformPost(rawClassName, post, isNew = false) {
   };
 }
 
+/**
+ * Transform a raw assignment into the shape the extension expects.
+ * Reuses existing extractDate and extractTime helpers from digest-utils.js.
+ * Adds a machine-sortable due date (dueIso) if a date can be parsed.
+ *
+ * @param {string} rawClassName
+ * @param {object} a
+ * @returns {object}
+ */
+function transformAssignment(rawClassName, a) {
+  const currentYear = new Date().getFullYear();
+  const textToScan = `${a.dueDate || ""} ${a.dueRaw || ""} ${a.details || ""}`.trim();
+  const parsedDate = (a.dueDate && /^\d{4}-\d{2}-\d{2}$/.test(a.dueDate))
+    ? a.dueDate
+    : extractDate(textToScan, currentYear);
+  const parsedTime = extractTime(textToScan);
+
+  let dueIso = null;
+  if (parsedDate) {
+    if (parsedTime) {
+      const singleTime = parsedTime.includes("-")
+        ? parsedTime.split(/[-–—]/).pop().trim()
+        : parsedTime;
+      const parsed = Date.parse(`${parsedDate} ${singleTime}`);
+      if (!isNaN(parsed)) {
+        dueIso = new Date(parsed).toISOString();
+      }
+    }
+    if (!dueIso) {
+      const parsed = Date.parse(`${parsedDate} 23:59:59`);
+      if (!isNaN(parsed)) {
+        dueIso = new Date(parsed).toISOString();
+      } else {
+        const fallback = Date.parse(parsedDate);
+        if (!isNaN(fallback)) {
+          dueIso = new Date(fallback).toISOString();
+        }
+      }
+    }
+  }
+
+  return {
+    ...a,
+    dueDate: parsedDate || a.dueDate || null,
+    dueTime: parsedTime || null,
+    dueIso,
+    className: shortClassName(rawClassName),
+    rawClassName,
+  };
+}
+
+/**
+ * Comparator for sorting assignments ascending by due date (soonest first).
+ * Assignments with no parseable date go last, not first.
+ */
+function compareAssignments(a, b) {
+  const dateA = a.dueIso || a.dueDate;
+  const dateB = b.dueIso || b.dueDate;
+
+  if (!dateA && !dateB) return 0;
+  if (!dateA) return 1;
+  if (!dateB) return -1;
+
+  const timeA = new Date(dateA).getTime();
+  const timeB = new Date(dateB).getTime();
+
+  if (isNaN(timeA) && isNaN(timeB)) return 0;
+  if (isNaN(timeA)) return 1;
+  if (isNaN(timeB)) return -1;
+
+  return timeA - timeB;
+}
+
 // ---------------------------------------------------------------------------
 // Express app
 // ---------------------------------------------------------------------------
@@ -337,11 +410,7 @@ app.get("/api/digest", (req, res) => {
     if (!assignmentsByRaw[raw]) assignmentsByRaw[raw] = [];
     for (const a of (entry.assignments || [])) {
       if (a.tab === "Upcoming" || a.tab === "Past due") {
-        assignmentsByRaw[raw].push({
-          ...a,
-          className: shortClassName(raw),
-          rawClassName: raw,
-        });
+        assignmentsByRaw[raw].push(transformAssignment(raw, a));
       }
     }
   }
@@ -385,7 +454,7 @@ app.get("/api/digest", (req, res) => {
       }
     }
 
-    const classAssignments = assignmentsByRaw[raw] || [];
+    const classAssignments = (assignmentsByRaw[raw] || []).slice().sort(compareAssignments);
 
     // Skip empty classes that have neither notices nor assignments
     if (transformedNotices.length === 0 && classAssignments.length === 0) continue;

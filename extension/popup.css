@@ -671,6 +671,16 @@ body::-webkit-scrollbar-thumb:hover {
   gap: 3px;
 }
 
+.assignment-card.due-soon {
+  border-color: var(--tag-deadline-border);
+  background: var(--tag-deadline-bg);
+}
+
+.assignment-card.due-soon .assignment-due-text {
+  color: var(--tag-deadline-text);
+  font-weight: 500;
+}
+
 .assignment-header-row {
   display: flex;
   align-items: center;

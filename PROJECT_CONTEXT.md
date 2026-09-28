@@ -251,6 +251,8 @@ flowchart TD
 - **Time Filter**: Defaults to "All Time" to prevent semester-wide notices from being hidden, with options for 24h, 48h, 7d.
 - **Real-time**: Live polling every 15s with `● Live` status badge and last sync ticker.
 - **Instant Search**: Live client-side keyword search across classes, tags, and assignments.
+- **Assignment Date Parsing & Sorting**: `server.js` (`transformAssignment`) uses `extractDate` and `extractTime` to build machine-sortable `dueIso` dates. `compareAssignments` sorts assignments ascending (soonest first) per class, guaranteeing undated tasks sort to the end.
+- **Due-Soon Visual Urgency**: `extension/popup.js` detects assignments due within 48 hours and attaches `.due-soon`, highlighted in amber via existing `--tag-deadline-*` variables in `extension/popup.css`.
 
 ### Immediate Next Step: Zero-Install Distribution (Step 6)
 - Solve the friction barrier for non-technical students:
@@ -292,4 +294,7 @@ it is the highest-leverage test target in the project. Current coverage:
 words, leap years), `extractTime` (12h, 24h, ranges, dot separators),
 `classify`, `isNoteworthy`, `filterRecentPosts`, `truncate`, `escapeCell`,
 `shortClassName` and `sectionLabel`.
+
+`test/assignment-sort.test.js` covers assignment date extraction (`dueDate`, `dueTime`,
+`dueIso`) and ascending sort verification (soonest first, undated tasks last).
 

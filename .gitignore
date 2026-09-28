@@ -1,5 +1,3 @@
-
-
 # Dependencies
 node_modules/
 
@@ -42,6 +40,11 @@ teamspulse.db
 # Internal strategy & agent context (private, do not make public)
 notes/
 strategy/
+scratch/
+
+# Test coverage
+coverage/
+.nyc_output/
 
 # Editor & OS files
 .vscode/

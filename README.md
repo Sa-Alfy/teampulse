@@ -195,7 +195,7 @@ TeamsPulse includes a lightweight Chrome/Edge Extension (Manifest V3) that provi
 * 🔍 **Instant Search**: Filter notices, exams, CTs, teachers, and tasks in real time as you type.
 * 🟢 **Live Auto-Sync**: Automatically polls the local server every 15 seconds with an animated `● Live` status badge and last sync ticker.
 * 🏷️ **Color-Coded Badges**: Distinct visual tags for `🧪 CT/Quiz`, `📝 Exam`, `📌 Deadline`, `🎤 Presentation`, `📊 Grades`, and `🔄 Reschedule`.
-* ⏳ **Task Tracking**: Highlights `⚠️ Past Due` and `⏳ Upcoming` assignments with due dates.
+* ⏳ **Task Tracking & Urgency Highlighting**: Highlights `⚠️ Past Due` and `⏳ Upcoming` assignments. Automatically sorts assignments soonest-first (undated tasks last) and visually flags tasks due within 48 hours with an urgent `due-soon` amber indicator.
 
 ### Setup Instructions:
 1. **Start the local API server**:

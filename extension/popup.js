@@ -265,9 +265,10 @@ function matchesTimeFilter(timestampIso, timeOption) {
  */
 function assignmentMatchesTimeFilter(assignment, timeOption) {
   if (timeOption === "all") return true;
-  if (!assignment.dueDate) return true;
+  const dateStr = assignment.dueIso || assignment.dueDate;
+  if (!dateStr) return true;
 
-  const due = new Date(assignment.dueDate).getTime();
+  const due = new Date(dateStr).getTime();
   if (isNaN(due)) return true;
 
   const windowMs = parseInt(timeOption, 10) * 3600 * 1000;
@@ -479,6 +480,17 @@ function applyFiltersAndRender() {
       for (const a of matchingAssignments) {
         const item = document.createElement("div");
         item.className = "assignment-card";
+
+        const dateStr = a.dueIso || a.dueDate;
+        if (dateStr) {
+          const dueTime = new Date(dateStr).getTime();
+          if (!isNaN(dueTime)) {
+            const diffMs = dueTime - Date.now();
+            if (diffMs >= 0 && diffMs <= 48 * 3600 * 1000) {
+              item.classList.add("due-soon");
+            }
+          }
+        }
 
         const headerRow = document.createElement("div");
         headerRow.className = "assignment-header-row";
