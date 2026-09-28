@@ -184,10 +184,16 @@ body::-webkit-scrollbar-thumb:hover {
   justify-content: center;
 }
 
-.icon-btn:hover {
+.icon-btn:hover,
+.icon-btn.active {
   background: var(--bg-card);
   border-color: var(--border-subtle);
   color: var(--text-main);
+}
+
+.filter-icon {
+  font-size: 13px;
+  display: inline-block;
 }
 
 .refresh-icon {

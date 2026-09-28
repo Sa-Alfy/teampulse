@@ -109,15 +109,18 @@ Because Manifest V3 Chrome extensions cannot access the local filesystem or SQLi
      - `GET /api/recent?hours=N`: Queries `posts` table from `teamspulse.db`.
    - CORS enabled for `chrome-extension://*` and `http://localhost`.
 3. **Chrome / Edge Extension (`extension/`)**:
-   - **`manifest.json`**: Manifest V3, zero background service worker overhead, host permissions scoped to `http://localhost:3457/*`.
+   - **`manifest.json`**: Manifest V3, zero background service worker overhead, host permissions scoped to `http://localhost:3457/*`. The `storage` permission is required for the persistent collapse state feature.
    - **`popup.html` / `popup.css` / `popup.js`**:
      - **380px** modern dark-theme dashboard (inspired by Linear / Teams dark mode).
      - **Class-Based Categorization**: Notices and assignments grouped per enrolled class (`CSE 312`, `PHY 104`, etc.).
      - **Category Switcher Tabs**: `All (N)` · `📢 Notices (N)` · `📝 Tasks (N)`.
+     - **Collapsible Filter Bar**: A 🔍 toggle button (`filterToggleBtn`) in the header shows/hides `.controls-bar` (class filter, time filter, search). Defaults to hidden on popup open; button carries `.active` and `aria-expanded` state. **Implemented** in `popup.html` + `popup.js` (`filterToggleBtn.addEventListener`).
      - **Filters**: Class filter dropdown, Time filter (`All Time` default, `24h`, `48h`, `7d`).
      - **Instant Search**: Real-time filtering across class names, tags, summaries, authors, and task titles.
+     - **Persistent Per-Class Collapse State**: Class card expanded/collapsed state is persisted to `chrome.storage.local` keyed by `c.key || c.rawClassName || c.className` (the stable raw class name). Applied synchronously before the card is painted to avoid a flash of wrong state. **Implemented** in `popup.js` (`getStoredCollapseState`, `saveCollapseState`, `collapseStatePromise`).
      - **Live Sync**: Auto-polls every 15s with an animated `● Live` status badge and last sync ticker.
    - **`icons/`**: Native PNG icons (`icon16.png`, `icon48.png`, `icon128.png`).
+
 
 ---
 
@@ -253,6 +256,9 @@ flowchart TD
 - **Instant Search**: Live client-side keyword search across classes, tags, and assignments.
 - **Assignment Date Parsing & Sorting**: `server.js` (`transformAssignment`) uses `extractDate` and `extractTime` to build machine-sortable `dueIso` dates. `compareAssignments` sorts assignments ascending (soonest first) per class, guaranteeing undated tasks sort to the end.
 - **Due-Soon Visual Urgency**: `extension/popup.js` detects assignments due within 48 hours and attaches `.due-soon`, highlighted in amber via existing `--tag-deadline-*` variables in `extension/popup.css`.
+- **Collapsible Filter Bar**: The `.controls-bar` section (class filter, time filter, search) is hidden by default on popup open. A 🔍 `filterToggleBtn` icon button in the header toggles it using the same `.hidden` / `hidden` attribute pattern used by state views elsewhere. The button gets `.active` and `aria-expanded` to reflect open/closed visually. Decision: hide by default because the common use case is a quick scan of cards, not filtering.
+- **Persistent Per-Class Collapse State**: After user collapses/expands a class card, the state is written to `chrome.storage.local` as `{ collapsedClasses: { [classKey]: boolean } }`. On next popup open, `getStoredCollapseState()` resolves via `collapseStatePromise`, which is included in the `Promise.all` inside `loadData`. This guarantees the state is fully loaded before `applyFiltersAndRender` runs, so cards are created with the correct `.collapsed` class from the start — no post-render patch, no visible flash. Key is `c.key || c.rawClassName || c.className` (the raw Teams name), which is section-specific and therefore the correct deduplication key (as established by the `shortClassName` collapse test in `test/`).
+
 
 ### Immediate Next Step: Zero-Install Distribution (Step 6)
 - Solve the friction barrier for non-technical students:

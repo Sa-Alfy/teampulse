@@ -20,6 +20,9 @@
           </span>
         </div>
         <div class="header-actions">
+          <button id="filterToggleBtn" class="icon-btn" title="Toggle filters" aria-label="Toggle filters" aria-expanded="false">
+            <span class="filter-icon">🔍</span>
+          </button>
           <button id="refreshBtn" class="icon-btn" title="Refresh data now" aria-label="Refresh">
             <span class="refresh-icon">🔄</span>
           </button>
@@ -46,7 +49,7 @@
     </nav>
 
     <!-- Filter & Search Bar -->
-    <section class="controls-bar">
+    <section class="controls-bar hidden" id="controlsBar" hidden>
       <div class="filter-row">
         <select id="classFilter" class="dropdown" aria-label="Filter by Class">
           <option value="all">All Classes</option>

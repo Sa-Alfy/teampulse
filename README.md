@@ -192,10 +192,12 @@ TeamsPulse includes a lightweight Chrome/Edge Extension (Manifest V3) that provi
 ### Features
 * 📚 **Categorized by Class**: See notices and assignments cleanly organized under each enrolled course (`CSE 312`, `PHY 104`, `MAT 103`, etc.).
 * 📑 **Category Switcher**: One-click tabs to switch between **All**, **📢 Notices**, and **📝 Tasks**.
-* 🔍 **Instant Search**: Filter notices, exams, CTs, teachers, and tasks in real time as you type.
+* 🔍 **Collapsible Filter Bar**: A 🔍 toggle button in the header reveals the class/time filters and search box. Hidden by default so the card feed is front and center on open.
+* 🔎 **Instant Search**: Filter notices, exams, CTs, teachers, and tasks in real time as you type.
 * 🟢 **Live Auto-Sync**: Automatically polls the local server every 15 seconds with an animated `● Live` status badge and last sync ticker.
 * 🏷️ **Color-Coded Badges**: Distinct visual tags for `🧪 CT/Quiz`, `📝 Exam`, `📌 Deadline`, `🎤 Presentation`, `📊 Grades`, and `🔄 Reschedule`.
 * ⏳ **Task Tracking & Urgency Highlighting**: Highlights `⚠️ Past Due` and `⏳ Upcoming` assignments. Automatically sorts assignments soonest-first (undated tasks last) and visually flags tasks due within 48 hours with an urgent `due-soon` amber indicator.
+* 💾 **Remembered Collapse State**: Each class card's expanded/collapsed state is saved across popup opens via `chrome.storage.local` — your preferred layout is restored instantly, with no visible flash.
 
 ### Setup Instructions:
 1. **Start the local API server**:

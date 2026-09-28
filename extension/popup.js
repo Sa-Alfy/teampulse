@@ -15,7 +15,9 @@ const API_BASE = "http://localhost:3457";
 
 // DOM Elements
 const refreshBtn       = document.getElementById("refreshBtn");
+const filterToggleBtn  = document.getElementById("filterToggleBtn");
 const retryBtn         = document.getElementById("retryBtn");
+const controlsBar      = document.getElementById("controlsBar");
 const classFilter      = document.getElementById("classFilter");
 const timeFilter       = document.getElementById("timeFilter");
 const searchInput      = document.getElementById("searchInput");
@@ -50,6 +52,42 @@ let rawStatusData      = null;
 let lastSyncTimestamp  = null;
 let pollingInterval    = null;
 let tickerInterval     = null;
+let collapsedState     = {};
+
+function getStoredCollapseState() {
+  return new Promise((resolve) => {
+    if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+      chrome.storage.local.get(["collapsedClasses"], (res) => {
+        if (res && res.collapsedClasses && typeof res.collapsedClasses === "object") {
+          resolve(res.collapsedClasses);
+        } else {
+          resolve({});
+        }
+      });
+    } else {
+      resolve({});
+    }
+  });
+}
+
+const collapseStatePromise = getStoredCollapseState().then((state) => {
+  collapsedState = { ...state };
+});
+
+function saveCollapseState(classKey, isCollapsed) {
+  collapsedState[classKey] = isCollapsed;
+  if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+    try {
+      chrome.storage.local.set({ collapsedClasses: collapsedState }, () => {
+        if (chrome.runtime && chrome.runtime.lastError) {
+          // Ignore storage errors in restricted contexts
+        }
+      });
+    } catch (_) {
+      // Storage unavailable
+    }
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -167,6 +205,7 @@ async function loadData(silent = false) {
     const [status, digest] = await Promise.all([
       fetchFromApi("/api/status"),
       fetchFromApi("/api/digest"),
+      collapseStatePromise,
     ]);
 
     rawStatusData = status;
@@ -338,9 +377,11 @@ function applyFiltersAndRender() {
 
     visibleClassesCount++;
 
+    const isCollapsed = Boolean(collapsedState[classKey]);
+
     // Render Class Card
     const card = document.createElement("div");
-    card.className = "class-card";
+    card.className = isCollapsed ? "class-card collapsed" : "class-card";
 
     // Header
     const header = document.createElement("div");
@@ -386,12 +427,13 @@ function applyFiltersAndRender() {
     // A bare click handler on a div has neither.
     header.setAttribute("role", "button");
     header.setAttribute("tabindex", "0");
-    header.setAttribute("aria-expanded", "true");
+    header.setAttribute("aria-expanded", isCollapsed ? "false" : "true");
     header.setAttribute("aria-label", `Toggle ${c.displayName || c.className}`);
 
     const toggleCollapse = () => {
       const collapsed = card.classList.toggle("collapsed");
       header.setAttribute("aria-expanded", collapsed ? "false" : "true");
+      saveCollapseState(classKey, collapsed);
     };
 
     header.addEventListener("click", toggleCollapse);
@@ -575,6 +617,17 @@ clearSearchBtn.addEventListener("click", () => {
   clearSearchBtn.classList.add("hidden");
   applyFiltersAndRender();
   searchInput.focus();
+});
+
+// Toggle Filter Bar
+filterToggleBtn.addEventListener("click", () => {
+  const isHidden = controlsBar.classList.toggle("hidden");
+  controlsBar.hidden = isHidden;
+  filterToggleBtn.setAttribute("aria-expanded", isHidden ? "false" : "true");
+  filterToggleBtn.classList.toggle("active", !isHidden);
+  if (!isHidden) {
+    searchInput.focus();
+  }
 });
 
 // Refresh & Retry
