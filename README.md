@@ -45,7 +45,7 @@ flowchart LR
 - [x] **Resilient UI Selectors**: Bypasses unstable Fluent UI atomic class names by anchoring to semantic `data-testid` / `data-test` / ARIA attributes.
 - [ ] **AI-Powered Parser**: Gemini Flash to extract structured dates, rooms, and syllabi from free-text posts.
 - [x] **Chrome / Edge Extension**: Quick popup showing today's deadlines, upcoming CTs, and new notices (served by the local API on port 3457).
-- [ ] **Telegram Bot**: Morning briefing push notifications.
+- [x] **Telegram Bot**: Morning briefing push notifications.
 
 ---
 
@@ -112,6 +112,12 @@ npm run digest -- --hours 24            # build a digest from the last 24h only
 ```
 
 Run the unit tests for the parsing rules with `npm test`.
+
+### Telegram Push (optional)
+1. Create a bot with [@BotFather](https://t.me/BotFather) and copy your bot token.
+2. Message your bot and get your numeric chat ID (e.g. from `@userinfobot`).
+3. Copy `.env.example` to `.env` and fill in `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`.
+4. Test delivery anytime with `node notify.js --test`.
 
 ---
 
@@ -238,7 +244,7 @@ TeamsPulse includes a lightweight Chrome/Edge Extension (Manifest V3) that provi
 ### 🔲 Phase 4: Zero-Install Distribution & Notifications
 - [ ] **Pure Web Store Extension**: In-browser content script reading `teams.microsoft.com` with zero Node.js/server requirement.
 - [ ] **1-Click Portable Runner**: Double-click `.bat` with embedded portable Node for frictionless classmate sharing.
-- [ ] Telegram / Discord bot webhooks for morning briefings.
+- [x] Telegram / Discord bot webhooks for morning briefings.
 
 ---
 

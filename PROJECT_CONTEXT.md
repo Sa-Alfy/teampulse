@@ -264,7 +264,7 @@ flowchart TD
 - Solve the friction barrier for non-technical students:
   1. **Pure Chrome Web Store Extension**: Read directly from `teams.microsoft.com` tab in-browser, bypassing local Node.js / server altogether.
   2. **1-Click Portable Bundle**: Double-click `.bat` launcher with portable embedded Node.js for zero-install friend sharing.
-  3. **Push Notifications**: Telegram bot or native desktop notifications for morning briefings.
+  3. **Push Notifications**: Telegram bot push notifications (Implemented: notify.js, sendTelegram) or native desktop notifications for morning briefings.
 
 ---
 

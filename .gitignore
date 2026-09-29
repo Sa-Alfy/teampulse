@@ -7,6 +7,7 @@ auth*.json
 *.session.json
 .env
 .env.*
+!.env.example
 
 # Scraped data & output files (contain real course names, instructors, dates)
 assignments.json

@@ -14,6 +14,7 @@
 const fs   = require("fs");
 const path = require("path");
 const db   = require("./db");
+const { sendTelegram } = require("./notify");
 
 const NOTICES_FILE     = "notices.json";
 const ASSIGNMENTS_FILE = "assignments.json";
@@ -110,7 +111,7 @@ function buildAssignmentsSection(assignments) {
 // Main
 // ---------------------------------------------------------------------------
 
-function main() {
+async function main() {
   const opts = parseArgs(process.argv.slice(2));
 
   if (!fs.existsSync(NOTICES_FILE)) {
@@ -245,11 +246,50 @@ function main() {
   }
   console.log(`💾 Recorded ${toRecord.length} post(s) (${surfaced} surfaced) in ${db.DB_PATH}`);
 
+  // ── Push to Telegram ──────────────────────────────────────────────────────
+  if (newCount > 0) {
+    try {
+      const newItems = [];
+      for (const c of classes) {
+        for (const post of c.newPosts) {
+          const row = toRow(post);
+          newItems.push({
+            className: c.rawClassName,
+            tag: row.tag,
+            summary: row.summary,
+            date: row.date,
+            sortKey: row.sortKey,
+          });
+        }
+      }
+      newItems.sort((a, b) => (b.sortKey > a.sortKey ? 1 : -1));
+
+      const lines = [`TeamsPulse: ${newCount} new post${newCount === 1 ? "" : "s"}`];
+      for (const item of newItems.slice(0, 8)) {
+        const dateStr = item.date ? ` (${item.date})` : "";
+        lines.push(`[${item.tag}] ${item.className} - ${item.summary}${dateStr}`);
+      }
+      if (newItems.length > 8) {
+        lines.push(`+${newItems.length - 8} more`);
+      }
+
+      const res = await sendTelegram(lines.join("\n"));
+      if (!res.sent && res.reason !== "not-configured") {
+        console.log(`Telegram push failed: ${res.reason}`);
+      }
+    } catch (err) {
+      console.log(`Telegram push failed: ${err.message}`);
+    }
+  }
+
   db.close();
 }
 
 if (require.main === module) {
-  main();
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
 }
 
 module.exports = { toRow, renderTable, buildAssignmentsSection, parseArgs };
