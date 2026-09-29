@@ -25,6 +25,8 @@
 const { DatabaseSync } = require("node:sqlite");
 const crypto   = require("crypto");
 const path     = require("path");
+const { fingerprintString } = require("./extension/core/fingerprint");
+
 
 // Place the DB next to this file so it's always in the project root.
 const DB_PATH = path.join(__dirname, "teamspulse.db");
@@ -96,14 +98,7 @@ function ensureSchema() {
  * @returns {string}         — hex digest
  */
 function hashPost(className, post) {
-  // Use timestampIso, fall back to timestampFull if ISO parse failed.
-  const ts      = post.timestampIso || post.timestampFull || "";
-  const author  = post.author || "";
-  const subject = post.subject || "";
-  // Cap body to 500 chars so transient "Loading..." mutations don't create
-  // a different hash on a retry run.
-  const body    = (post.body || "").slice(0, 500);
-  const raw     = `${className}\0${author}\0${ts}\0${subject}\0${body}`;
+  const raw = fingerprintString(className, post);
   return crypto.createHash("sha256").update(raw, "utf8").digest("hex");
 }
 
