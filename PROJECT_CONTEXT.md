@@ -50,12 +50,15 @@
 - **Dependency**: none - uses Node's built-in `node:sqlite` (`DatabaseSync`).
   Requires **Node 24+** (the module does not exist before 22.5 and warns on 22.x).
   `better-sqlite3` is NOT used and is not in `package.json`.
+- **Fingerprint source of truth**: `extension/core/fingerprint.js` → `fingerprintString()`.
+  `db.js` imports this function and feeds the result into `crypto.createHash("sha256")`.
+  The async `hashPost` in `fingerprint.js` uses SubtleCrypto and produces identical hex.
 
 ### Schema — `posts` table
 
 | Column | Type | Description |
 |---|---|---|
-| `hash` | TEXT PRIMARY KEY | `sha256(rawClassName \0 author \0 timestampIso \0 subject \0 body[:500])` - subject and author are part of the tuple because two posts in one class at one minute with the same body but different subjects are two posts, and `INSERT OR IGNORE` would silently drop one. Versioned via `PRAGMA user_version`. |
+| `hash` | TEXT PRIMARY KEY | `sha256(rawClassName \0 author \0 timestampIso \0 subject \0 body[:500])` — **five** fields, null-byte separated. Subject and author are included because two posts in one class at one minute with the same body but different subjects are two posts. Versioned via `PRAGMA user_version`. |
 | `class_name` | TEXT | **Raw** class name - never the shortened display label |
 | `surfaced` | INTEGER | 1 = appeared in a digest (suppresses future runs); 0 = scraped but filtered out as not noteworthy. Only surfaced posts count as seen, so loosening the classifier can still surface the rest. |
 | `timestamp_iso` | TEXT | ISO 8601 post timestamp (may be null if Teams didn't parse it) |
@@ -72,7 +75,7 @@
 ### Exported API (`db.js`)
 ```js
 db.ensureSchema()              // CREATE TABLE IF NOT EXISTS — safe on every run
-db.hashPost(className, post)   // → hex sha256 string
+db.hashPost(className, post)   // → hex sha256 string (delegates to fingerprintString)
 db.isNew(hash)                 // → boolean (true = never seen)
 db.markSeen(hash, {className, post})  // INSERT OR IGNORE
 db.close()                     // close connection (useful in tests)
@@ -293,14 +296,12 @@ flowchart TD
 
 ## 7. Test Coverage
 
-`npm test` runs `node --test` over `test/`. `digest-utils.js` is seven pure
-functions with no dependencies and is where the date/time parsing bugs live -
-it is the highest-leverage test target in the project. Current coverage:
-`extractDate` (including impossible dates, US-format fallback, ambiguous month
-words, leap years), `extractTime` (12h, 24h, ranges, dot separators),
-`classify`, `isNoteworthy`, `filterRecentPosts`, `truncate`, `escapeCell`,
-`shortClassName` and `sectionLabel`.
+`npm test` runs `node --test` over `test/` (56 total tests, all passing).
 
-`test/assignment-sort.test.js` covers assignment date extraction (`dueDate`, `dueTime`,
-`dueIso`) and ascending sort verification (soonest first, undated tasks last).
+- **`test/digest-utils.test.js`**: `extractDate` (impossible dates, US-format fallback, ambiguous month words, leap years), `extractTime` (12h, 24h, ranges, dot separators), `classify`, `isNoteworthy`, `filterRecentPosts`, `truncate`, `escapeCell`, `shortClassName`, `sectionLabel`.
+- **`test/hash-post.test.js`**: `db.hashPost` parity, fingerprint tuple collision checks, body capping at 500 chars.
+- **`test/assignment-sort.test.js`**: assignment date extraction (`dueDate`, `dueTime`, `dueIso`) and ascending sort verification (soonest first, undated tasks last).
+- **`test/notify.test.js`**: Telegram bot push chunking (4000 char limit), unconfigured env safety, redacting bot tokens.
+- **`test/core.test.js`**: Phase 1 browser-safe core tests: fingerprint parity (`async hashPost === db.hashPost` across sample posts), store deduplication, filtered-out post non-burning, in-batch duplicate handling, concurrent ingest safety, shape data structures, newHours clamping, health staleness thresholds, and assignment sorting.
+
 

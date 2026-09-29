@@ -2,6 +2,8 @@
 
 > **Turn chaotic Microsoft Teams courses into a clean, automated academic briefing.**  
 > Scrapes classes, tracks assignments, extracts Class Test (CT) dates, and delivers a unified daily digest — showing only what's **new since the last run**.
+> 
+> **⚡ Phase 1 of the standalone extension is in progress on `feat/standalone-extension`.**
 
 ---
 
@@ -20,6 +22,8 @@ University students live inside Microsoft Teams, but finding what actually matte
 
 **TeamsPulse** automates Microsoft Teams using Playwright and your own student session. It navigates your classes in the background, extracts structured assignment and announcement data, deduplicates across runs, and transforms noisy chat feeds into an actionable daily briefing.
 
+### Current architecture (server-assisted mode — fully working)
+
 ```mermaid
 flowchart LR
     A[Teams Web Session] -->|Playwright Scraper| B[TeamsPulse Core]
@@ -29,7 +33,20 @@ flowchart LR
     D --> E
     E -->|new posts only| F[Digest Builder]
     F --> G[digest.md — Daily Briefing]
-    G --> H[Chrome Extension / Telegram Bot]
+    F -->|Telegram| H[📱 Push Notification]
+    E -->|Express API :3457| I[Chrome Extension popup]
+```
+
+### Standalone extension architecture (in progress — `feat/standalone-extension`)
+
+```mermaid
+flowchart LR
+    CS1[Content Script\nTeams tab] -->|chrome.runtime.sendMessage| SW[Service Worker\nbackground.js]
+    CS2[Content Script\nAssignments iframe] -->|chrome.runtime.sendMessage| SW
+    SW --> CORE[extension/core/]
+    CORE --> ST[(chrome.storage.local\ntp:v1:* keys)]
+    ST -->|getFullState| SH[shape.js\nbuildDigest + buildStatus]
+    SH --> POP[popup.js]
 ```
 
 ---
@@ -43,9 +60,41 @@ flowchart LR
 - [x] **Rule-Based Digest**: Keyword + regex classification (CT/Quiz, Exam, Deadline, Grades, Reschedule, Cancelled) — no AI required, works offline.
 - [x] **Storage & Deduplication**: SQLite (`teamspulse.db`) stores a SHA-256 fingerprint for every processed post. On the next run, already-seen posts are silently skipped — only genuinely new content appears in the digest.
 - [x] **Resilient UI Selectors**: Bypasses unstable Fluent UI atomic class names by anchoring to semantic `data-testid` / `data-test` / ARIA attributes.
-- [ ] **AI-Powered Parser**: Gemini Flash to extract structured dates, rooms, and syllabi from free-text posts.
 - [x] **Chrome / Edge Extension**: Quick popup showing today's deadlines, upcoming CTs, and new notices (served by the local API on port 3457).
 - [x] **Telegram Bot**: Morning briefing push notifications.
+- [x] **Browser-safe core** (`extension/core/`): `fingerprint.js`, `store.js`, `shape.js` — SubtleCrypto, `chrome.storage.local`, zero Node-only APIs. (Phase 1 complete)
+- [ ] **Standalone Extension**: Content scripts read Teams directly; no server, no Node.js required for end users. (Phase 2–3 in progress)
+
+---
+
+## 📂 Project Structure
+
+```
+teampulse/
+├── extension/
+│   ├── core/                        ← browser-safe shared modules (NEW)
+│   │   ├── digest-utils.js          ← canonical copy of parsing rules (dual export)
+│   │   ├── fingerprint.js           ← SubtleCrypto SHA-256, fingerprintString
+│   │   ├── store.js                 ← chrome.storage.local store + memoryBackend
+│   │   └── shape.js                 ← buildDigest, buildStatus, transformPost, …
+│   ├── manifest.json                ← MV3 manifest
+│   ├── background.js                ← service worker (ephemeral, no in-memory state)
+│   ├── popup.html / popup.css / popup.js
+│   └── icons/
+├── test/
+│   ├── core.test.js                 ← Phase 1 tests (fingerprint parity, store, shape)
+│   ├── assignment-sort.test.js
+│   ├── digest-utils.test.js
+│   ├── hash-post.test.js
+│   └── notify.test.js
+├── db.js                            ← SQLite layer (Node only; hashPost delegates to fingerprint.js)
+├── digest-utils.js                  ← one-line shim → extension/core/digest-utils.js
+├── build-digest.js                  ← CLI digest builder
+├── server.js                        ← local Express API (server-assisted mode)
+├── teams.js / scrape-posts.js       ← Playwright scrapers
+├── notify.js                        ← Telegram push
+└── PROJECT_CONTEXT.md               ← full technical architecture (read this first)
+```
 
 ---
 
@@ -111,13 +160,45 @@ npm run scrape:posts -- --scrollback 20 # dig further back through channel histo
 npm run digest -- --hours 24            # build a digest from the last 24h only
 ```
 
-Run the unit tests for the parsing rules with `npm test`.
+Run the unit tests with `npm test` (56 tests, all passing).
 
 ### Telegram Push (optional)
 1. Create a bot with [@BotFather](https://t.me/BotFather) and copy your bot token.
 2. Message your bot and get your numeric chat ID (e.g. from `@userinfobot`).
 3. Copy `.env.example` to `.env` and fill in `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`.
 4. Test delivery anytime with `node notify.js --test`.
+
+---
+
+## 🧩 Chrome Extension — Current Setup (server-assisted)
+
+TeamsPulse includes a lightweight Chrome/Edge Extension (Manifest V3) that provides a fast, dark-themed academic briefing popup without needing to open Microsoft Teams.
+
+### Setup Instructions
+1. **Start the local API server**:
+   ```bash
+   npm run server
+   ```
+   This serves your scraped notices and assignments locally at `http://localhost:3457`.
+
+2. **Install the extension in your browser**:
+   - Open Chrome or Edge and navigate to `chrome://extensions`
+   - Enable **Developer mode** (toggle in the top-right corner)
+   - Click **Load unpacked**
+   - Select the `extension/` folder inside your TeamsPulse directory
+
+3. **Pin & Use**:
+   - Pin the ⚡ **TeamsPulse** extension to your browser toolbar.
+   - Click the extension icon to view today's deadlines, upcoming CTs/quizzes, and class announcements.
+
+### Features
+* 📚 **Categorized by Class**: Notices and assignments grouped under each enrolled course.
+* 📑 **Category Switcher**: Tabs for **All**, **📢 Notices**, and **📝 Tasks**.
+* 🔍 **Collapsible Filter Bar**: Class/time filters and search, hidden by default.
+* 🎯 **Instant Search**: Real-time filtering across classes, tags, summaries, authors.
+* 🟢 **Live Auto-Sync**: Polls every 15s with animated `● Live` badge and last sync ticker.
+* ⏳ **Due-Soon Urgency**: Assignments due within 48 h get an amber highlight.
+* 💾 **Remembered Collapse State**: Expanded/collapsed state persisted via `chrome.storage.local`.
 
 ---
 
@@ -142,87 +223,19 @@ Run the unit tests for the parsing rules with `npm test`.
 ]
 ```
 
-### `digest.md` — daily briefing
-
-A Markdown table grouped by class, showing only posts that are new since the last run:
-
-```
-# TeamsPulse Digest
-
-_Generated 2025-09-15T… — rule-based, no AI involved._
-_3 new since last run; 23 still standing across 5 class(es)._
-
-## Summer_2026_CSE 312 (V1)_232_D4
-
-### 🆕 New since last run
-
-| Date       | Time     | Type        | Summary                         | Source               |
-|------------|----------|-------------|---------------------------------|----------------------|
-| 2025-09-20 | 9:30 AM  | 🧪 CT/Quiz  | CT-2 will be held on 20.09…     | A. Instructor, Sep 14 |
-```
-
-A redacted sample lives in [`digest.example.md`](digest.example.md). Your real
-`digest.md` and `digests/` are gitignored — they carry your actual course names,
-instructors and deadlines.
-
 ### `teamspulse.db` — deduplication store
 
-SQLite database (excluded from git), written through Node's built-in
-`node:sqlite` — there is no `better-sqlite3` dependency.
+SQLite database (excluded from git), written through Node's built-in `node:sqlite`.
 
 Each post is fingerprinted with
-`sha256(rawClassName, author, timestamp, subject, body[:500])`. All five fields
-matter: drop any of them and two genuinely different posts collapse into one,
-and the loser is suppressed forever.
+`sha256(rawClassName + "\0" + author + "\0" + timestampIso + "\0" + subject + "\0" + body[:500])`.
+All five fields matter. The raw string is produced by `fingerprintString()` in
+`extension/core/fingerprint.js` — both `db.js` (Node/sync) and the browser extension
+(SubtleCrypto/async) use the same function, guaranteeing identical hashes.
 
-Posts are recorded in two states. `surfaced = 1` means the post actually
-appeared in a digest and will be suppressed next run; `surfaced = 0` means it
-was scraped but filtered out as not noteworthy. Only surfaced posts count as
-seen, so loosening the classifier later can still bring the others through.
-
-```bash
-# See all surfaced posts
-node -e "const {DatabaseSync}=require('node:sqlite'); const d=new DatabaseSync('teamspulse.db',{readOnly:true}); console.table(d.prepare('SELECT class_name,author,snippet,seen_at FROM posts WHERE surfaced=1 ORDER BY seen_at DESC LIMIT 20').all())"
-```
-
-> The hash tuple is versioned (`PRAGMA user_version`). Changing it drops the old
-> table on next run: previously-seen posts reappear once, which is the safe
-> direction — re-showing a notice is recoverable, hiding one is not.
-
----
-
-## 🧩 Chrome Extension
-
-TeamsPulse includes a lightweight Chrome/Edge Extension (Manifest V3) that provides a fast, dark-themed academic briefing popup without needing to open Microsoft Teams.
-
-### Features
-* 📚 **Categorized by Class**: See notices and assignments cleanly organized under each enrolled course (`CSE 312`, `PHY 104`, `MAT 103`, etc.).
-* 📑 **Category Switcher**: One-click tabs to switch between **All**, **📢 Notices**, and **📝 Tasks**.
-* 🔍 **Collapsible Filter Bar**: A 🔍 toggle button in the header reveals the class/time filters and search box. Hidden by default so the card feed is front and center on open.
-* 🔎 **Instant Search**: Filter notices, exams, CTs, teachers, and tasks in real time as you type.
-* 🟢 **Live Auto-Sync**: Automatically polls the local server every 15 seconds with an animated `● Live` status badge and last sync ticker.
-* 🏷️ **Color-Coded Badges**: Distinct visual tags for `🧪 CT/Quiz`, `📝 Exam`, `📌 Deadline`, `🎤 Presentation`, `📊 Grades`, and `🔄 Reschedule`.
-* ⏳ **Task Tracking & Urgency Highlighting**: Highlights `⚠️ Past Due` and `⏳ Upcoming` assignments. Automatically sorts assignments soonest-first (undated tasks last) and visually flags tasks due within 48 hours with an urgent `due-soon` amber indicator.
-* 💾 **Remembered Collapse State**: Each class card's expanded/collapsed state is saved across popup opens via `chrome.storage.local` — your preferred layout is restored instantly, with no visible flash.
-
-### Setup Instructions:
-1. **Start the local API server**:
-   ```bash
-   npm run server
-   ```
-   This serves your scraped notices and assignments locally at `http://localhost:3457` (with a friendly web dashboard and CORS enabled for extensions).
-
-2. **Install the extension in your browser**:
-   - Open Chrome or Edge and navigate to `chrome://extensions`
-   - Enable **Developer mode** (toggle in the top-right corner)
-   - Click **Load unpacked**
-   - Select the `extension/` folder inside your TeamsPulse directory
-
-3. **Pin & Use**:
-   - Pin the ⚡ **TeamsPulse** extension to your browser toolbar.
-   - Click the extension icon to view today's deadlines, upcoming CTs/quizzes, and class announcements.
-   - Filter by specific class or time range (`All Time` by default, `Last 24h`, `Last 48h`, `Last 7 days`).
-   - Hit 🔄 to refresh anytime after running `npm run scrape`.
+Posts are recorded in two states: `surfaced = 1` means the post appeared in a digest
+and will be suppressed next run; `surfaced = 0` means it was filtered out. Only
+surfaced posts count as seen, so loosening the classifier later can still recover them.
 
 ---
 
@@ -230,21 +243,30 @@ TeamsPulse includes a lightweight Chrome/Edge Extension (Manifest V3) that provi
 
 ### ✅ Phase 1: Core Scraper
 - [x] Multi-class assignment scraper with iframe piercing.
-- [x] Channel `Posts` scraper for the `General` channel (announcements, bot posts, file uploads).
-- [x] Resilient UI selectors (semantic `data-testid`, ARIA, not fragile atomic CSS classes).
+- [x] Channel `Posts` scraper for the `General` channel.
+- [x] Resilient UI selectors (semantic `data-testid`, ARIA).
 
 ### ✅ Phase 2: Intelligence & Data Layer
-- [x] Rule-based digest builder — keyword + regex classification, zero AI dependency.
-- [x] **SQLite storage & deduplication** — SHA-256 fingerprint per post, skips seen items on every run.
+- [x] Rule-based digest builder — keyword + regex classification.
+- [x] **SQLite storage & deduplication** — SHA-256 fingerprint per post, skips seen items.
 
-### ✅ Phase 3: Client Interface (UI)
-- [x] **Chrome / Edge Extension**: Fast popup showing today's deadlines, upcoming CTs, and new notices via local API server.
-- [x] **Course Categorization & Live Sync**: Auto-polling, category tabs, instant search, and dark mode design.
+### ✅ Phase 3: Client Interface (server-assisted)
+- [x] **Chrome / Edge Extension**: Fast popup via local API server on port 3457.
+- [x] **Telegram Push**: Morning briefing via `notify.js`.
 
-### 🔲 Phase 4: Zero-Install Distribution & Notifications
-- [ ] **Pure Web Store Extension**: In-browser content script reading `teams.microsoft.com` with zero Node.js/server requirement.
-- [ ] **1-Click Portable Runner**: Double-click `.bat` with embedded portable Node for frictionless classmate sharing.
-- [x] Telegram / Discord bot webhooks for morning briefings.
+### 🔄 Phase 4: Standalone Extension (in progress — `feat/standalone-extension`)
+- [x] `extension/core/digest-utils.js` — canonical dual-export parsing module
+- [x] `extension/core/fingerprint.js` — `fingerprintString` + async `sha256Hex` (SubtleCrypto)
+- [x] `extension/core/store.js` — `createStore(backend)` with `chromeBackend` + `memoryBackend`, promise-queued writes, 200-post cap, filter-first/dedup-second semantics
+- [x] `extension/core/shape.js` — `buildDigest`, `buildStatus`, `transformPost`, `transformAssignment`, `compareAssignments`
+- [x] `test/core.test.js` — 14 new tests (56 total, all passing)
+- [ ] Content scripts: Teams tab scraper + Assignments iframe scraper (Phase 2)
+- [ ] Background service worker: message routing + store ingestion (Phase 2)
+- [ ] Manifest update + popup wired to standalone path (Phase 3)
+
+### 🔲 Phase 5: Distribution
+- [ ] **Chrome Web Store**: Packaged standalone extension (no server required for end users).
+- [ ] **1-Click Portable Runner**: Double-click `.bat` with embedded portable Node.
 
 ---
 
@@ -259,11 +281,17 @@ TeamsPulse includes a lightweight Chrome/Edge Extension (Manifest V3) that provi
 - **Iframe Sandboxing**:  
   Assignments are hosted in a separate origin iframe (`assignments.edu.cloud.microsoft`). Playwright's `frameLocator` pierces the sandbox to interact with internal tab buttons and cards.
 
-- **Deduplication Hash**:  
-  `sha256(className + "\0" + timestampIso + "\0" + body[:500])` — null-byte separators prevent field-boundary collisions. Body is capped at 500 chars so transient "Loading..." states don't create diverging hashes on retry runs.
+- **Fingerprint Tuple**:  
+  `sha256(className + "\0" + author + "\0" + ts + "\0" + subject + "\0" + body[:500])` — five fields, null-byte separated, body capped at 500 chars. Defined once in `extension/core/fingerprint.js`; `db.js` delegates to it so both environments are always identical.
+
+- **Filter-First, Dedup-Second**:  
+  Posts that fail `isNoteworthy()` are recorded with `surfaced=false` and never counted as seen. Improving the classifier in a future run can still surface them.
 
 - **Crash-Safe Write Order**:  
-  `digest.md` is written before hashes are persisted to `teamspulse.db`. A crash mid-write means posts reappear on the next run rather than being silently swallowed.
+  `digest.md` is written before hashes are persisted. A crash mid-write means posts reappear on the next run rather than being silently swallowed.
+
+- **Promise Queue in Store**:  
+  `extension/core/store.js` serialises all writes through a promise chain so concurrent ingests from two content scripts never produce a lost-update race.
 
 ---
 
