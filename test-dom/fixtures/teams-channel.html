@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Teams Channel Fixture</title>
+</head>
+<body>
+  <!--
+    Fixture for teams-top.js DOM extraction tests.
+    DISCLAIMER: Proves port logic only, not compatibility with the real Teams DOM.
+  -->
+
+  <!-- Post 1 -->
+  <div data-tid="channel-pane-message" id="msg-1">
+    <div data-tid="post-message-subheader">
+      Dr. Alpha
+      <span data-tid="timestamp" title="Monday, September 29, 2026 10:00 AM">Mon 10:00 AM</span>
+    </div>
+    <div data-tid="subject-line">CT-3 Schedule</div>
+    <div data-tid="message-body">CT-3 will be held on 2026-10-15 at 9:30 AM in room 301.</div>
+  </div>
+
+  <!-- Post 2 with a reply -->
+  <div data-tid="channel-pane-message" id="msg-2">
+    <div data-tid="post-message-subheader">
+      Dr. Beta
+      <span data-tid="timestamp" title="Tuesday, September 30, 2026 2:00 PM">Tue 2:00 PM</span>
+    </div>
+    <div data-tid="subject-line">Lab Cancelled</div>
+    <div data-tid="message-body">Today's lab is cancelled due to a scheduling conflict.</div>
+    <div data-tid="response-surface">
+      <div data-tid="reply-message-header">Student A <span data-tid="timestamp">Tue 2:10 PM</span></div>
+      <div data-tid="message-body">Noted, thank you!</div>
+    </div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Assignments Fixture</title>
+</head>
+<body>
+<!--
+  Fixture for assignments-frame.js DOM tests.
+  DISCLAIMER: Proves port logic only, not compatibility with the real Assignments iframe DOM.
+-->
+
+<!-- Tab bar -->
+<div role="tablist">
+  <button data-test="Upcoming"  role="tab" aria-selected="true"  tabindex="0">Upcoming</button>
+  <button data-test="Past due"  role="tab" aria-selected="false" tabindex="-1">Past due</button>
+  <button data-test="Completed" role="tab" aria-selected="false" tabindex="-1">Completed</button>
+</div>
+
+<!-- Tab panels -->
+<div id="panel-upcoming">
+  <div data-test="assignment-card" id="card-up-1-aabb1234-5678-1234-abcd-ef0123456789">
+    <div class="fui-CardHeader__header">Lab 4 Report</div>
+    <div class="fui-CardHeader__description">Submit to Teams by Oct 5</div>
+    <div class="fui-CardHeader__action">Not submitted</div>
+    <time datetime="2026-10-05T23:59:00Z">Oct 5, 11:59 PM</time>
+  </div>
+  <div data-test="assignment-card" id="card-up-2-bbcc2345-6789-2345-bcde-f01234567890">
+    <div class="fui-CardHeader__header">HW-5</div>
+    <div class="fui-CardHeader__description">Chapter 7 exercises. Due Oct 10</div>
+    <div class="fui-CardHeader__action">Not submitted</div>
+  </div>
+</div>
+
+<div id="panel-pastdue" style="display:none">
+  <div data-test="assignment-card" id="card-pd-1-ccdd3456-7890-3456-cdef-012345678901">
+    <div class="fui-CardHeader__header">HW-3</div>
+    <div class="fui-CardHeader__description">Due Sep 15</div>
+    <div class="fui-CardHeader__action">Overdue</div>
+    <span aria-label="Due Sep 15"></span>
+  </div>
+</div>
+
+<div id="panel-completed" style="display:none">
+  <div data-test="assignment-card" id="card-cp-1-ddee4567-8901-4567-def0-123456789012">
+    <div class="fui-CardHeader__header">Quiz-1</div>
+    <div class="fui-CardHeader__description">Completed Sep 5</div>
+    <div class="fui-CardHeader__action">Turned in</div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const panels = {
+    "Upcoming":  document.getElementById("panel-upcoming"),
+    "Past due":  document.getElementById("panel-pastdue"),
+    "Completed": document.getElementById("panel-completed"),
+  };
+  const tabBtns = document.querySelectorAll("[role='tab']");
+
+  tabBtns.forEach((tab) => {
+    tab.addEventListener("click", () => {
+      const name = tab.getAttribute("data-test");
+      tabBtns.forEach((t) => t.setAttribute("aria-selected", t === tab ? "true" : "false"));
+      for (const [k, p] of Object.entries(panels)) {
+        if (p) p.style.display = (k === name ? "" : "none");
+      }
+    });
+  });
+})();
+</script>
+</body>
+</html>
