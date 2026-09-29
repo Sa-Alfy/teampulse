@@ -11,6 +11,7 @@
 const { spawnSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const { sendTelegram } = require("../notify");
 
 const ROOT_DIR = path.resolve(__dirname, "..");
 const LOGS_DIR = path.join(ROOT_DIR, "logs");
@@ -29,7 +30,7 @@ function runDaily() {
   return result.status === 0;
 }
 
-function main() {
+async function main() {
   let success = runDaily();
   if (!success) {
     success = runDaily();
@@ -47,8 +48,12 @@ function main() {
   fs.appendFileSync(LOG_FILE, logLine, "utf-8");
 
   if (!success) {
+    await sendTelegram(`TeamsPulse: daily run FAILED after 2 attempts at ${timestamp}`);
     process.exit(1);
   }
 }
 
-main();
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
