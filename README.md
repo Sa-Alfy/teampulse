@@ -3,7 +3,7 @@
 > **Turn chaotic Microsoft Teams courses into a clean, automated academic briefing.**  
 > Scrapes classes, tracks assignments, extracts Class Test (CT) dates, and delivers a unified daily digest — showing only what's **new since the last run**.
 > 
-> **⚡ Phase 1 of the standalone extension is in progress on `feat/standalone-extension`.**
+> **⚡ Phase 2 of the standalone extension complete on `feat/standalone-extension`.** Content scripts, message router, and DOM test suite all passing. Phase 3 next (popup wired to standalone path).
 
 ---
 
@@ -62,8 +62,10 @@ flowchart LR
 - [x] **Resilient UI Selectors**: Bypasses unstable Fluent UI atomic class names by anchoring to semantic `data-testid` / `data-test` / ARIA attributes.
 - [x] **Chrome / Edge Extension**: Quick popup showing today's deadlines, upcoming CTs, and new notices (served by the local API on port 3457).
 - [x] **Telegram Bot**: Morning briefing push notifications.
-- [x] **Browser-safe core** (`extension/core/`): `fingerprint.js`, `store.js`, `shape.js` — SubtleCrypto, `chrome.storage.local`, zero Node-only APIs. (Phase 1 complete)
-- [ ] **Standalone Extension**: Content scripts read Teams directly; no server, no Node.js required for end users. (Phase 2–3 in progress)
+- [x] **Browser-safe core** (`extension/core/`): `fingerprint.js`, `store.js`, `shape.js` — SubtleCrypto, `chrome.storage.local`, zero Node-only APIs. (Phase 1 ✅)
+- [x] **Content scripts**: `teams-top.js` (debounced MO, TP_POSTS) + `assignments-frame.js` (3-tab loop, TP_ASSIGNMENTS). (Phase 2 ✅)
+- [x] **Message router** (`extension/core/messages.js`): origin validation, size limits, tab-context joining, pure/testable. (Phase 2 ✅)
+- [ ] **Standalone Extension popup**: Popup wired to `chrome.storage.local` — no server or Node.js required for end users. (Phase 3)
 
 ---
 
@@ -72,21 +74,31 @@ flowchart LR
 ```
 teampulse/
 ├── extension/
-│   ├── core/                        ← browser-safe shared modules (NEW)
+│   ├── core/                        ← browser-safe shared modules (Phase 1 ✅)
 │   │   ├── digest-utils.js          ← canonical copy of parsing rules (dual export)
 │   │   ├── fingerprint.js           ← SubtleCrypto SHA-256, fingerprintString
 │   │   ├── store.js                 ← chrome.storage.local store + memoryBackend
+│   │   ├── messages.js              ← pure handleMessage (origin + size validation) (Phase 2 ✅)
 │   │   └── shape.js                 ← buildDigest, buildStatus, transformPost, …
+│   ├── content/                     ← MV3 content scripts (Phase 2 ✅)
+│   │   ├── teams-top.js             ← debounced MO → TP_CLASS_CONTEXT + TP_POSTS
+│   │   └── assignments-frame.js     ← 3-tab loop → TP_ASSIGNMENTS (60s cooldown)
 │   ├── manifest.json                ← MV3 manifest
-│   ├── background.js                ← service worker (ephemeral, no in-memory state)
+│   ├── background.js                ← service worker: importScripts + onMessage + tabs.onRemoved
 │   ├── popup.html / popup.css / popup.js
 │   └── icons/
 ├── test/
 │   ├── core.test.js                 ← Phase 1 tests (fingerprint parity, store, shape)
+│   ├── messages.test.js             ← Phase 2 tests: 12 origin/size/context tests (node:test)
 │   ├── assignment-sort.test.js
 │   ├── digest-utils.test.js
 │   ├── hash-post.test.js
 │   └── notify.test.js
+├── test-dom/                        ← Playwright DOM tests (NOT part of node --test)
+│   ├── runner.js                    ← 4 headless Chromium tests
+│   └── fixtures/
+│       ├── teams-channel.html       ← 2-post channel fixture
+│       └── assignments.html         ← 3-tab assignments fixture
 ├── db.js                            ← SQLite layer (Node only; hashPost delegates to fingerprint.js)
 ├── digest-utils.js                  ← one-line shim → extension/core/digest-utils.js
 ├── build-digest.js                  ← CLI digest builder
@@ -160,7 +172,7 @@ npm run scrape:posts -- --scrollback 20 # dig further back through channel histo
 npm run digest -- --hours 24            # build a digest from the last 24h only
 ```
 
-Run the unit tests with `npm test` (56 tests, all passing).
+Run unit tests with `npm test` (72 tests, all passing). Run DOM/integration tests with `npm run test:dom` (4 Playwright headless tests — fixtures prove port logic only, not live Teams DOM compatibility).
 
 ### Telegram Push (optional)
 1. Create a bot with [@BotFather](https://t.me/BotFather) and copy your bot token.
@@ -254,15 +266,19 @@ surfaced posts count as seen, so loosening the classifier later can still recove
 - [x] **Chrome / Edge Extension**: Fast popup via local API server on port 3457.
 - [x] **Telegram Push**: Morning briefing via `notify.js`.
 
-### 🔄 Phase 4: Standalone Extension (in progress — `feat/standalone-extension`)
+### 🔄 Phase 4: Standalone Extension (Phase 2 complete — `feat/standalone-extension`)
 - [x] `extension/core/digest-utils.js` — canonical dual-export parsing module
 - [x] `extension/core/fingerprint.js` — `fingerprintString` + async `sha256Hex` (SubtleCrypto)
 - [x] `extension/core/store.js` — `createStore(backend)` with `chromeBackend` + `memoryBackend`, promise-queued writes, 200-post cap, filter-first/dedup-second semantics
 - [x] `extension/core/shape.js` — `buildDigest`, `buildStatus`, `transformPost`, `transformAssignment`, `compareAssignments`
-- [x] `test/core.test.js` — 14 new tests (56 total, all passing)
-- [ ] Content scripts: Teams tab scraper + Assignments iframe scraper (Phase 2)
-- [ ] Background service worker: message routing + store ingestion (Phase 2)
-- [ ] Manifest update + popup wired to standalone path (Phase 3)
+- [x] `test/core.test.js` — 60 node:test unit tests (Phase 1 core)
+- [x] `extension/content/teams-top.js` — debounced MutationObserver, `TP_CLASS_CONTEXT` + `TP_POSTS`
+- [x] `extension/content/assignments-frame.js` — 3-tab loop, `TP_ASSIGNMENTS`, 60 s cooldown
+- [x] `extension/core/messages.js` — pure `handleMessage`: origin + size validation, tab-context join
+- [x] `background.js` updated — `importScripts`, `onMessage` router, `tabs.onRemoved` cleanup
+- [x] `test/messages.test.js` — 12 node:test tests (72 total, all passing)
+- [x] `test-dom/` — 4 Playwright headless DOM tests (`npm run test:dom`)
+- [ ] Popup wired to `chrome.storage.local` (standalone path, no localhost) (Phase 3)
 
 ### 🔲 Phase 5: Distribution
 - [ ] **Chrome Web Store**: Packaged standalone extension (no server required for end users).

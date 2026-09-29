@@ -124,10 +124,50 @@ Because Manifest V3 Chrome extensions cannot access the local filesystem or SQLi
      - **Live Sync**: Auto-polls every 15s with an animated `● Live` status badge and last sync ticker.
    - **`icons/`**: Native PNG icons (`icon16.png`, `icon48.png`, `icon128.png`).
 
+---
+
+## 2.5. Standalone Extension Architecture (Phase 1 + Phase 2 — `feat/standalone-extension`)
+
+### Goal
+Remove the Node.js / Express server dependency entirely. The extension reads Teams DOM directly via content scripts and stores data in `chrome.storage.local`.
+
+### Data Flow
+
+```mermaid
+flowchart LR
+    CS1["teams-top.js\n(content script, top frame)"] -->|TP_CLASS_CONTEXT\nTP_POSTS| SW["background.js\n(service worker)"]
+    CS2["assignments-frame.js\n(content script, all_frames)"] -->|TP_ASSIGNMENTS| SW
+    SW -->|handleMessage| MSG["core/messages.js\n(pure validator + router)"]
+    MSG -->|ingestPosts\ningestAssignments| STORE["core/store.js\n(createStore + chromeBackend)"]
+    STORE -->|chrome.storage.local\ntp:v1:* keys| CHROME[(chrome.storage.local)]
+    CHROME -->|getFullState| SHAPE["core/shape.js\n(buildDigest + buildStatus)"]
+    SHAPE --> POP["popup.js\n(Phase 3 — not yet wired)"]
+```
+
+### Component Breakdown
+
+| File | Role | Phase |
+|------|------|-------|
+| `extension/core/digest-utils.js` | Dual-export parsing rules — `isNoteworthy`, `classify`, `extractDate`, `extractTime`, `filterRecentPosts` | Phase 1 ✅ |
+| `extension/core/fingerprint.js` | `fingerprintString`, async `sha256Hex` via SubtleCrypto | Phase 1 ✅ |
+| `extension/core/store.js` | `createStore(backend)`, `chromeBackend`, `memoryBackend`, promise-queued writes, 200-post cap | Phase 1 ✅ |
+| `extension/core/shape.js` | `buildDigest`, `buildStatus`, `transformPost`, `transformAssignment`, `compareAssignments` | Phase 1 ✅ |
+| `extension/core/messages.js` | Pure `handleMessage(msg, sender, deps)`: origin validation (two Teams origins + assignments origin), size limits (className≤200, posts≤500, assignments≤300, strings≤20k), tab-context join via `chrome.storage.session` | Phase 2 ✅ |
+| `extension/content/teams-top.js` | Top-frame content script. Debounced (1500ms) MutationObserver on `[data-tid="channel-pane-message"]`. Sends `TP_CLASS_CONTEXT` + `TP_POSTS`. `getCurrentClassName()` returns **null** — NOT VERIFIED (selector unknown; test hook: `window.__TP_TEST_CLASS`) | Phase 2 ✅ |
+| `extension/content/assignments-frame.js` | Cross-origin iframe script. `waitFor()` on MutationObserver. 3-tab loop (Upcoming / Past due / Completed), `extractCards()` with `getClientRects()` visibility filter, 60s cooldown | Phase 2 ✅ |
+| `extension/background.js` | `importScripts(...)`, `createStore(chromeBackend())`, session adapter over `chrome.storage.session`, `onMessage` listener, `tabs.onRemoved` cleanup. Phase 1 localhost polling kept for Phase 3 removal. | Phase 2 ✅ |
+| `extension/popup.js` | Still wired to localhost:3457 — to be ported in Phase 3 | Phase 3 🔲 |
+
+### Important Constraints
+- **Content scripts must not import from `core/`** — they are IIFE-wrapped and self-contained.
+- **No new `host_permissions`** — the extension does not fetch any external URLs.
+- **`chrome.storage.session`** holds ephemeral per-tab context (`tp:tabctx:<tabId>`); cleared when the tab closes via `tabs.onRemoved`.
+- **`getCurrentClassName()` is NOT VERIFIED** — it returns null in production until the user pastes the outerHTML of the Teams class-name element. The DOM test bypasses this with `window.__TP_TEST_CLASS`.
+- **Teams origins**: `https://teams.microsoft.com` is confirmed. `https://teams.cloud.microsoft` is **UNVERIFIED** — included in matches/origin checks and flagged in comments.
 
 ---
 
-## 3. Proven DOM Selectors & Scraper Techniques
+
 
 ### 3.1. Avoid Fluent UI Atomic Class Names
 - **Rule**: Teams v2 uses Fluent UI with generated atomic class hashes (e.g. `f22iagw`, `rfxo2k2`, `___11yg1ik`). These change across builds. **Never use them as selectors.**
@@ -296,12 +336,21 @@ flowchart TD
 
 ## 7. Test Coverage
 
-`npm test` runs `node --test` over `test/` (56 total tests, all passing).
+### Unit Tests (`npm test` — `node --test`, 72 total, all passing)
 
 - **`test/digest-utils.test.js`**: `extractDate` (impossible dates, US-format fallback, ambiguous month words, leap years), `extractTime` (12h, 24h, ranges, dot separators), `classify`, `isNoteworthy`, `filterRecentPosts`, `truncate`, `escapeCell`, `shortClassName`, `sectionLabel`.
 - **`test/hash-post.test.js`**: `db.hashPost` parity, fingerprint tuple collision checks, body capping at 500 chars.
 - **`test/assignment-sort.test.js`**: assignment date extraction (`dueDate`, `dueTime`, `dueIso`) and ascending sort verification (soonest first, undated tasks last).
 - **`test/notify.test.js`**: Telegram bot push chunking (4000 char limit), unconfigured env safety, redacting bot tokens.
 - **`test/core.test.js`**: Phase 1 browser-safe core tests: fingerprint parity (`async hashPost === db.hashPost` across sample posts), store deduplication, filtered-out post non-burning, in-batch duplicate handling, concurrent ingest safety, shape data structures, newHours clamping, health staleness thresholds, and assignment sorting.
+- **`test/messages.test.js`** *(Phase 2)*: 12 tests covering `handleMessage` — valid `TP_CLASS_CONTEXT` (both Teams origins), valid `TP_POSTS` ingested into store, wrong origin rejected for all three message types, oversize `className` (>200 chars) rejected, `posts` array >500 rejected, `assignments` array >300 rejected, string field >20,000 chars rejected, `TP_ASSIGNMENTS` without prior class context dropped, `TP_ASSIGNMENTS` with context lands under correct class.
 
+### DOM / Integration Tests (`npm run test:dom` — Playwright headless Chromium, 4 tests, all passing)
+
+> **Note**: These fixtures prove port logic only — they do not verify compatibility with the live Teams DOM.
+
+- `teams-top.js` fixture with 2 posts → one `TP_POSTS` message with 2 posts
+- `teams-top.js` 3rd post added dynamically → new `TP_POSTS` fires after the 1500ms debounce
+- `teams-top.js` empty post list → no `TP_POSTS` message sent
+- `assignments-frame.js` 3-tab fixture → one `TP_ASSIGNMENTS` with all cards from all three tabs; original tab restored
 

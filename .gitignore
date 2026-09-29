@@ -42,6 +42,8 @@ teamspulse.db
 notes/
 strategy/
 scratch/
+test-dom/debug*.js
+test-dom/vis-test*.js
 
 # Test coverage
 coverage/
