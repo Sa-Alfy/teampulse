@@ -3,7 +3,7 @@
   "name": "TeamsPulse",
   "version": "0.5.0",
   "description": "Daily academic briefing from Microsoft Teams — new posts only.",
-  "permissions": ["alarms", "storage"],
+  "permissions": ["alarms"],
   "host_permissions": ["http://localhost:3457/*"],
   "background": {
     "service_worker": "background.js"
