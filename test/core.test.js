@@ -24,7 +24,8 @@ const {
   sha256Hex,
   hashPost: fpHashPost,
 } = require("../extension/core/fingerprint");
-const { createStore, memoryBackend } = require("../extension/core/store");
+const { createStore, memoryBackend, chromeBackend } = require("../extension/core/store");
+const { isNoteworthy } = require("../extension/core/digest-utils");
 const {
   clampHours,
   computeHealth,
@@ -325,3 +326,147 @@ test("shape: buildStatus returns required keys when no data", () => {
   assert.ok("serverTime"   in result, "serverTime missing");
   assert.strictEqual(result.noDataYet, true);
 });
+
+// ---------------------------------------------------------------------------
+// 11. Store: getState() returns full state for multiple classes
+// ---------------------------------------------------------------------------
+
+test("store: getState() returns full state for multiple classes", async () => {
+  const store = createStore(memoryBackend());
+  const nowIso = new Date().toISOString();
+
+  await store.ingestPosts("Class A", [SAMPLE_POSTS[0]], nowIso, hashFn, isNoteworthyStub);
+  await store.ingestAssignments("Class B", [{ tab: "Upcoming", title: "HW1" }], nowIso);
+
+  const state = await store.getState();
+  assert.ok("seenHashes" in state, "seenHashes missing from getState");
+  assert.ok("classes" in state, "classes missing from getState");
+  assert.ok("Class A" in state.classes, "Class A missing from state.classes");
+  assert.ok("Class B" in state.classes, "Class B missing from state.classes");
+
+  assert.strictEqual(state.classes["Class A"].lastSync, nowIso);
+  assert.ok(Object.keys(state.classes["Class A"].posts).length > 0, "Class A posts should not be empty");
+  assert.deepStrictEqual(state.classes["Class A"].assignments, []);
+
+  assert.strictEqual(state.classes["Class B"].lastSync, nowIso);
+  assert.strictEqual(state.classes["Class B"].assignments.length, 1);
+  assert.deepStrictEqual(state.classes["Class B"].posts, {});
+});
+
+// ---------------------------------------------------------------------------
+// 12. Integration: ingest noteworthy post -> getState -> buildDigest & buildStatus
+// ---------------------------------------------------------------------------
+
+test("integration: ingest noteworthy post -> getState -> buildDigest has newPostCount 1 & isNew, buildStatus has totalSeen 1", async () => {
+  const store = createStore(memoryBackend());
+  const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+
+  const post = {
+    author: "Prof. Smith",
+    subject: "CT-1 Announcement",
+    body: "CT-1 will be held on 2026-10-15.",
+    isAnnouncement: true,
+    timestampIso: nowIso,
+  };
+
+  await store.ingestPosts("CSE 101", [post], nowIso, hashFn, isNoteworthy);
+
+  const state = await store.getState();
+  const digest = buildDigest(state, { nowMs });
+  const status = buildStatus(state, nowMs);
+
+  assert.strictEqual(digest.newPostCount, 1, `Expected newPostCount 1, got ${digest.newPostCount}`);
+  assert.strictEqual(digest.classes.length, 1, `Expected 1 class in digest, got ${digest.classes.length}`);
+  assert.strictEqual(digest.classes[0].notices.length, 1, `Expected 1 notice in class, got ${digest.classes[0].notices.length}`);
+  assert.strictEqual(digest.classes[0].notices[0].isNew, true, "Notice should be flagged isNew: true");
+  assert.strictEqual(status.totalSeen, 1, `Expected totalSeen 1, got ${status.totalSeen}`);
+});
+
+// ---------------------------------------------------------------------------
+// 13. Store: clearAll() resets state and buildDigest reports noDataYet
+// ---------------------------------------------------------------------------
+
+test("store: after clearAll(), getState() is empty and buildDigest reports noDataYet", async () => {
+  const store = createStore(memoryBackend());
+  const nowIso = new Date().toISOString();
+
+  await store.ingestPosts("Class A", [SAMPLE_POSTS[0]], nowIso, hashFn, isNoteworthyStub);
+  await store.ingestAssignments("Class B", [{ tab: "Upcoming", title: "HW1" }], nowIso);
+
+  await store.clearAll();
+
+  const state = await store.getState();
+  assert.deepStrictEqual(state.classes, {});
+  assert.deepStrictEqual(state.seenHashes, {});
+
+  const digest = buildDigest(state);
+  assert.strictEqual(digest.noDataYet, true);
+  assert.strictEqual(digest.classes.length, 0);
+});
+
+// ---------------------------------------------------------------------------
+// 14. Store: chromeBackend clearAll removes only tp:v1:* keys
+// ---------------------------------------------------------------------------
+
+test("store: chromeBackend clearAll with fake chrome.storage.local removes only tp:v1:* keys", async () => {
+  const fakeStorage = {
+    "other_app_key": "preserve_me",
+    "collapsedClasses": { "CSE 101": true },
+    "tp:v1:seen-hashes": { "abc": { seenAt: "2026-09-30T00:00:00Z", surfaced: true } },
+    "tp:v1:class-index": ["CSE 101"],
+    "tp:v1:posts:CSE 101": { "abc": {} },
+    "tp:v1:assignments:CSE 101": [],
+    "tp:v1:last-sync:CSE 101": "2026-09-30T00:00:00Z",
+  };
+
+  const originalChrome = globalThis.chrome;
+  try {
+    globalThis.chrome = {
+      runtime: {},
+      storage: {
+        local: {
+          get(keys, cb) {
+            if (keys === null) {
+              cb({ ...fakeStorage });
+            } else {
+              const res = {};
+              for (const k of keys) {
+                if (k in fakeStorage) res[k] = fakeStorage[k];
+              }
+              cb(res);
+            }
+          },
+          set(obj, cb) {
+            Object.assign(fakeStorage, obj);
+            cb();
+          },
+          remove(keys, cb) {
+            const list = Array.isArray(keys) ? keys : [keys];
+            for (const k of list) {
+              delete fakeStorage[k];
+            }
+            cb();
+          },
+          clear() {
+            throw new Error("clear() must never be called");
+          },
+        },
+      },
+    };
+
+    const store = createStore(chromeBackend());
+    await store.clearAll();
+
+    assert.strictEqual(fakeStorage["other_app_key"], "preserve_me");
+    assert.deepStrictEqual(fakeStorage["collapsedClasses"], { "CSE 101": true });
+    assert.strictEqual("tp:v1:seen-hashes" in fakeStorage, false);
+    assert.strictEqual("tp:v1:class-index" in fakeStorage, false);
+    assert.strictEqual("tp:v1:posts:CSE 101" in fakeStorage, false);
+    assert.strictEqual("tp:v1:assignments:CSE 101" in fakeStorage, false);
+    assert.strictEqual("tp:v1:last-sync:CSE 101" in fakeStorage, false);
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+

@@ -25,6 +25,7 @@
 const MAX_POSTS_PER_CLASS = 200; // cap stored posts per class; never prune seen hashes
 const KEY_PREFIX          = "tp:v1:";
 const KEY_SEEN_HASHES     = `${KEY_PREFIX}seen-hashes`;
+const KEY_CLASS_INDEX     = `${KEY_PREFIX}class-index`;
 const KEY_POSTS_PFX       = `${KEY_PREFIX}posts:`;
 const KEY_ASSIGN_PFX      = `${KEY_PREFIX}assignments:`;
 const KEY_SYNC_PFX        = `${KEY_PREFIX}last-sync:`;
@@ -75,6 +76,10 @@ function memoryBackend() {
   return {
     get(keys) {
       const result = {};
+      if (keys === null) {
+        Object.assign(result, store);
+        return Promise.resolve(result);
+      }
       for (const k of keys) {
         if (Object.prototype.hasOwnProperty.call(store, k)) result[k] = store[k];
       }
@@ -85,7 +90,8 @@ function memoryBackend() {
       return Promise.resolve();
     },
     remove(keys) {
-      for (const k of keys) delete store[k];
+      const list = Array.isArray(keys) ? keys : [keys];
+      for (const k of list) delete store[k];
       return Promise.resolve();
     },
     // expose raw store for test assertions
@@ -128,6 +134,15 @@ function createStore(backend) {
   }
 
   /**
+   * Read the list of known class names from storage.
+   * Shape: string[]
+   */
+  async function readClassIndex() {
+    const data = await backend.get([KEY_CLASS_INDEX]);
+    return Array.isArray(data[KEY_CLASS_INDEX]) ? data[KEY_CLASS_INDEX] : [];
+  }
+
+  /**
    * Read posts for one class.
    * Shape: { [hash]: { post, className, seenAt, surfaced } }
    */
@@ -151,8 +166,10 @@ function createStore(backend) {
    */
   async function ingestPosts(className, posts, nowIso, hashFn, isNoteworthyFn) {
     return enqueue(async () => {
-      const seenHashes  = await readSeenHashes();
-      const storedPosts = await readPosts(className);
+      const seenHashes   = await readSeenHashes();
+      const storedPosts  = await readPosts(className);
+      const classIndex   = await readClassIndex();
+      const updatedIndex = classIndex.includes(className) ? classIndex : [...classIndex, className];
 
       let scanned     = 0;
       let newCount    = 0;
@@ -203,22 +220,20 @@ function createStore(backend) {
 
       // Cap stored posts per class (keep newest by seenAt)
       const postEntries = Object.entries(storedPosts);
+      let postsToSave = storedPosts;
       if (postEntries.length > MAX_POSTS_PER_CLASS) {
         postEntries.sort((a, b) => (b[1].seenAt || "") > (a[1].seenAt || "") ? 1 : -1);
         const trimmed = {};
         for (const [k, v] of postEntries.slice(0, MAX_POSTS_PER_CLASS)) trimmed[k] = v;
-        await backend.set({
-          [postsKey(className)]: trimmed,
-          [syncKey(className)]: nowIso,
-          [KEY_SEEN_HASHES]: seenHashes,
-        });
-      } else {
-        await backend.set({
-          [postsKey(className)]: storedPosts,
-          [syncKey(className)]: nowIso,
-          [KEY_SEEN_HASHES]: seenHashes,
-        });
+        postsToSave = trimmed;
       }
+
+      await backend.set({
+        [postsKey(className)]: postsToSave,
+        [syncKey(className)]: nowIso,
+        [KEY_SEEN_HASHES]: seenHashes,
+        [KEY_CLASS_INDEX]: updatedIndex,
+      });
 
       return { scanned, new: newCount, alreadySeen, filteredOut };
     });
@@ -233,29 +248,24 @@ function createStore(backend) {
    */
   async function ingestAssignments(className, assignments, nowIso) {
     return enqueue(async () => {
+      const classIndex   = await readClassIndex();
+      const updatedIndex = classIndex.includes(className) ? classIndex : [...classIndex, className];
       await backend.set({
         [assignKey(className)]: assignments || [],
         [syncKey(className)]: nowIso,
+        [KEY_CLASS_INDEX]: updatedIndex,
       });
     });
   }
 
   /**
    * Return the full store state: all classes, seen-hash map, last-sync times.
+   * Reads the class index and returns { seenHashes, classes: { [className]: { posts, assignments, lastSync } } }.
    * @returns {Promise<object>}
    */
   async function getState() {
-    // Discover all class keys
-    const seenData = await backend.get([KEY_SEEN_HASHES]);
-    const seenHashes = seenData[KEY_SEEN_HASHES] || {};
-
-    // We need to enumerate all known class names. They're discoverable from
-    // all keys in the backend only if backend exposes _raw (memoryBackend).
-    // For chromeBackend we'd need chrome.storage.local.get(null) — expose a
-    // helper to enumerate keys. For now, return what we have.
-    // Callers that built state incrementally can pass it in; this is useful
-    // for shape.js which works from state already assembled by the SW.
-    return { seenHashes, classes: {} };
+    const classNames = await readClassIndex();
+    return getFullState(classNames);
   }
 
   /**
@@ -291,23 +301,11 @@ function createStore(backend) {
    */
   async function clearAll() {
     return enqueue(async () => {
-      // For memoryBackend with _raw we can enumerate; for chrome we'd use
-      // chrome.storage.local.clear(). Expose both paths:
-      if (backend._raw) {
-        for (const k of Object.keys(backend._raw)) {
-          if (k.startsWith(KEY_PREFIX)) delete backend._raw[k];
-        }
-        return;
+      const allData = await backend.get(null);
+      const tpKeys = Object.keys(allData || {}).filter((k) => k.startsWith(KEY_PREFIX));
+      if (tpKeys.length > 0) {
+        await backend.remove(tpKeys);
       }
-      // Chrome: get all keys first (null = all items)
-      const allData = await new Promise((resolve, reject) => {
-        chrome.storage.local.get(null, (items) => {
-          if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
-          resolve(items);
-        });
-      });
-      const tpKeys = Object.keys(allData).filter((k) => k.startsWith(KEY_PREFIX));
-      if (tpKeys.length > 0) await backend.remove(tpKeys);
     });
   }
 
@@ -320,10 +318,11 @@ function createStore(backend) {
     // expose constants for consumers
     MAX_POSTS_PER_CLASS,
     KEY_PREFIX,
+    KEY_CLASS_INDEX,
   };
 }
 
-const _store = { createStore, chromeBackend, memoryBackend, MAX_POSTS_PER_CLASS };
+const _store = { createStore, chromeBackend, memoryBackend, MAX_POSTS_PER_CLASS, KEY_PREFIX, KEY_CLASS_INDEX };
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = _store;
