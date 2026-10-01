@@ -21,7 +21,9 @@ importScripts(
 
 // ── Store & Session Backends ────────────────────────────────────────────────
 
-const _store = TP.createStore(TP.chromeBackend());
+// importScripts shares one global scope: names must not clash with core/*.js
+// top-level declarations (store.js already declares `_store`).
+const bgStore = TP.createStore(TP.chromeBackend());
 
 const _sessionBackend = {
   get(key) {
@@ -51,7 +53,7 @@ const _sessionBackend = {
 };
 
 const _deps = {
-  store:   _store,
+  store:   bgStore,
   session: _sessionBackend,
   nowIso:  () => new Date().toISOString(),
 };
@@ -84,7 +86,7 @@ const BADGE_PERIOD_MIN = 30; // the 24 h "new" window ages with time
 
 async function refreshBadge() {
   try {
-    const state = await _store.getState();
+    const state = await bgStore.getState();
     const count = TP.buildDigest(state).newPostCount || 0;
     const text  = count > 0 ? String(count) : "";
     await chrome.action.setBadgeText({ text });
