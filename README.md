@@ -83,6 +83,7 @@ Both paths share the same parsing rules (`extension/core/digest-utils.js`) and p
 - [x] **Sync all classes**: one click opens each class in your Teams tab, captures it, and returns you where you were (hidden teams skipped). *Not yet tested on live Teams.*
 - [x] **Scraper health**: if Teams changes its page and capture stops working, the popup says "Scraper may be out of date" instead of quietly showing old data.
 - [x] **Clear stored data**: one button wipes everything the extension stored.
+- [x] **Export assignments (.ics)**: download a calendar file of dated assignments, generated on your device (`extension/core/ics.js`); import it into Google Calendar, Outlook or Apple Calendar. Re-importing updates events instead of duplicating them.
 - [x] **Telegram Bot** (self-host): morning briefing push notifications.
 
 ---

@@ -689,6 +689,27 @@ syncAllBtn.addEventListener("click", async () => {
 
 chrome.storage.local.get([SYNC_STATUS_KEY], (res) => renderSyncStatus(res && res[SYNC_STATUS_KEY]));
 
+// ── Export assignments (.ics) — generated on-device, saved via a blob: link ──
+document.getElementById("exportIcsBtn").addEventListener("click", () => {
+  const { ics, exported, skippedUndated } = TP.buildIcs(rawDigestData, Date.now());
+  if (exported === 0) {
+    syncStatus.textContent = skippedUndated
+      ? `No assignments with a due date to export (${skippedUndated} undated).`
+      : "No assignments to export yet.";
+    return;
+  }
+  const url = URL.createObjectURL(new Blob([ics], { type: "text/calendar;charset=utf-8" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `assignments-${new Date().toISOString().slice(0, 10)}.ics`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  syncStatus.textContent = `Exported ${exported} assignment${exported === 1 ? "" : "s"}` +
+    (skippedUndated ? ` (${skippedUndated} undated skipped).` : ".");
+});
+
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "local") return;
   if (changes[SYNC_STATUS_KEY]) renderSyncStatus(changes[SYNC_STATUS_KEY].newValue);

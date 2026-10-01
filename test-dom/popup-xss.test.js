@@ -121,7 +121,7 @@ async function run(browser, runTest) {
     }));
     assert.strictEqual(dom.imgs, 0, "an <img> element was created");
     assert.strictEqual(dom.inlineScripts, 0, "an inline <script> exists");
-    assert.strictEqual(dom.scripts, 5, `expected the 5 static <script src> tags, got ${dom.scripts}`);
+    assert.strictEqual(dom.scripts, 6, `expected the 6 static <script src> tags, got ${dom.scripts}`);
     assert.deepStrictEqual(dialogs, [], "a dialog fired");
     assert.deepStrictEqual(requests, [], `unexpected requests: ${requests.join(", ")}`);
     assert.strictEqual(await page.locator("#staleBanner").isHidden(), true, "fresh data must not show stale banner");
@@ -152,6 +152,26 @@ async function run(browser, runTest) {
   });
 }
 
+async function runIcs(browser, runTest) {
+  await runTest("Export assignments (.ics) downloads an on-device calendar file, no requests", async () => {
+    const now  = new Date().toISOString();
+    const seed = seedState(now, now);
+    seed["tp:v1:assignments:Test CSE 312"].push(
+      { tab: "Upcoming", title: "Lab 9", details: "", dueDate: "2026-10-05", dueRaw: "" });
+    const { ctx, page, requests } = await openPopup(browser, seed);
+    await page.waitForSelector("#feedContainer:not(.hidden)", { timeout: 5000 });
+    const [download] = await Promise.all([page.waitForEvent("download"), page.click("#exportIcsBtn")]);
+    assert.match(download.suggestedFilename(), /^assignments-\d{4}-\d{2}-\d{2}\.ics$/);
+    const body = require("fs").readFileSync(await download.path(), "utf8");
+    assert.match(body, /^BEGIN:VCALENDAR\r\n/);
+    assert.strictEqual((body.match(/BEGIN:VEVENT/g) || []).length, 1, "only the dated assignment");
+    assert.ok(body.includes("SUMMARY:Lab 9"), "dated assignment exported");
+    assert.match(await page.locator("#syncStatus").textContent(), /Exported 1 assignment \(1 undated skipped\)/);
+    assert.deepStrictEqual(requests, [], `unexpected requests: ${requests.join(", ")}`);
+    await ctx.close();
+  });
+}
+
 async function runHealth(browser, runTest) {
   await runTest("scraper problem newer than last capture → 'Scraper may be out of date' banner", async () => {
     const now  = new Date().toISOString();
@@ -166,7 +186,11 @@ async function runHealth(browser, runTest) {
   });
 }
 
-module.exports = { run: async (browser, runTest) => { await run(browser, runTest); await runHealth(browser, runTest); } };
+module.exports = { run: async (browser, runTest) => {
+  await run(browser, runTest);
+  await runHealth(browser, runTest);
+  await runIcs(browser, runTest);
+} };
 
 if (process.env.NODE_TEST_CONTEXT) {
   require("node:test").test("popup DOM tests (run with npm run test:dom)", { skip: true }, () => {});
