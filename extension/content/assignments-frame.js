@@ -231,11 +231,25 @@ async function scrape() {
   }
 
   // Send regardless of whether assignments is empty (the background validates).
-  chrome.runtime.sendMessage({
-    type:        "TP_ASSIGNMENTS",
-    assignments,
-    scrapedAt:   new Date().toISOString(),
-  });
+  sendAssignments({ type: "TP_ASSIGNMENTS", assignments, scrapedAt: new Date().toISOString() }, 2);
+}
+
+/**
+ * Send with a short retry: the background rejects assignments until the top
+ * frame's TP_CLASS_CONTEXT has landed, which can race this iframe's load.
+ * Stops silently if the extension was reloaded under this page.
+ */
+function sendAssignments(msg, retriesLeft) {
+  try {
+    if (!(chrome.runtime && chrome.runtime.id)) return;
+    chrome.runtime.sendMessage(msg, (res) => {
+      let err = null;
+      try { err = chrome.runtime.lastError; } catch (_) { /* context gone */ }
+      if (!err && res && res.ok) return;
+      console.warn(`[TeamsPulse] TP_ASSIGNMENTS not stored: ${err ? err.message : (res && res.reason) || "no response"}`);
+      if (retriesLeft > 0) setTimeout(() => sendAssignments(msg, retriesLeft - 1), 3000);
+    });
+  } catch (_) { /* extension context invalidated */ }
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────

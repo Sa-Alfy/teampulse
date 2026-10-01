@@ -206,12 +206,52 @@
   let _lastClassName  = null;   // last className sent via TP_CLASS_CONTEXT
   let _lastPostSig    = null;   // fingerprint of last TP_POSTS payload
   let _debounceTimer  = null;
+  let _healthTimer    = null;
+  let _dead           = false;  // extension reloaded/updated under this page
+
+  // ── Messaging ─────────────────────────────────────────────────────────────
+
+  /**
+   * After the extension is reloaded or updated, Chrome does not re-inject into
+   * already-open tabs and this (old) script can no longer reach the extension:
+   * chrome.runtime.id becomes undefined and sendMessage throws. Stop cleanly;
+   * the user must reload the Teams tab (the popup says so).
+   */
+  function contextAlive() {
+    try { return !!(chrome.runtime && chrome.runtime.id); } catch (_) { return false; }
+  }
+
+  function shutdown() {
+    _dead = true;
+    try { observer.disconnect(); } catch (_) { /* not created yet */ }
+    if (_healthTimer !== null) clearInterval(_healthTimer);
+    if (_debounceTimer !== null) clearTimeout(_debounceTimer);
+  }
+
+  /** Send to the background; onFail(reason) runs if it errors or is rejected. */
+  function send(msg, onFail) {
+    if (_dead) return;
+    if (!contextAlive()) { shutdown(); return; }
+    try {
+      chrome.runtime.sendMessage(msg, (res) => {
+        let err = null;
+        try { err = chrome.runtime.lastError; } catch (_) { /* context gone */ }
+        if (err || !res || !res.ok) {
+          const reason = err ? err.message : (res && res.reason) || "no response";
+          console.warn(`[TeamsPulse] ${msg.type} not stored: ${reason}`);
+          if (onFail) onFail();
+        }
+      });
+    } catch (_) {
+      shutdown();
+    }
+  }
 
   // ── Core send logic ────────────────────────────────────────────────────────
 
   function sendClassContext(className) {
-    chrome.runtime.sendMessage({ type: "TP_CLASS_CONTEXT", className });
     _lastClassName = className;
+    send({ type: "TP_CLASS_CONTEXT", className }, () => { _lastClassName = null; });
   }
 
   function tryFlushPosts() {
@@ -232,15 +272,16 @@
     if (sig === _lastPostSig) return;  // unchanged → no message
 
     _lastPostSig = sig;
-    chrome.runtime.sendMessage({
+    send({
       type:       "TP_POSTS",
       className,
       posts,
       scrapedAt:  new Date().toISOString(),
-    });
+    }, () => { _lastPostSig = null; }); // not stored → retry on next change
   }
 
   function scheduleSend() {
+    if (_dead) return;
     if (_debounceTimer !== null) clearTimeout(_debounceTimer);
     _debounceTimer = setTimeout(() => {
       _debounceTimer = null;
@@ -303,13 +344,30 @@
     if (_problem.reported || now - _problem.since < grace) return;
 
     _problem.reported = true;
-    chrome.runtime.sendMessage(
+    send(
       kind === "no-class" ? { type: "TP_HEALTH", status: kind }
                           : { type: "TP_HEALTH", status: kind, className }
     );
   }
 
-  setInterval(checkHealth, HEALTH_TICK_MS);
+  _healthTimer = setInterval(checkHealth, HEALTH_TICK_MS);
+
+  // ── Resend after "Clear stored data" ───────────────────────────────────────
+  // The store never deletes tp:v1:* keys except on clearAll, so a removal means
+  // the user wiped data: forget what was sent so the open channel is re-captured.
+  try {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (_dead || area !== "local") return;
+      const wiped = Object.entries(changes).some(
+        ([k, c]) => k.startsWith("tp:v1:") && c.newValue === undefined
+      );
+      if (!wiped) return;
+      _lastPostSig   = null;
+      _lastClassName = null;
+      _problem       = null;
+      scheduleSend();
+    });
+  } catch (_) { /* storage unavailable in this context */ }
 
   // Initial check on load
   tryFlushPosts();

@@ -26,13 +26,19 @@ const FIXTURE_CLASS = "Summer_2026_CSE 312 (V1)_ 232_D4";
 const CHROME_STUB_TEAMS = `
 (function() {
   window.__msgs = [];
+  window.__storageListeners = [];
+  window.__reply = function() { return { ok: true }; };   // tests may override
   window.chrome = {
     runtime: {
       id: "test-extension-id",
-      sendMessage: function(msg) {
+      lastError: undefined,
+      sendMessage: function(msg, cb) {
         window.__msgs.push(JSON.parse(JSON.stringify(msg)));
+        const res = window.__reply(msg);
+        if (cb) setTimeout(function() { cb(res); }, 0);
       }
-    }
+    },
+    storage: { onChanged: { addListener: function(fn) { window.__storageListeners.push(fn); } } }
   };
 })();
 `;
@@ -232,7 +238,78 @@ async function main() {
     await ctx.close();
   });
 
-  // (5) Scraper health — fake clock, so the grace periods run instantly.
+  // (5) Reliability: clear → resend, rejection → retry, orphaned script → silent stop
+  async function loadedChannel() {
+    const ctx  = await browser.newContext();
+    const page = await ctx.newPage();
+    const errors = [];
+    page.on("pageerror", (e) => errors.push(e.message));
+    await page.addInitScript({ content: CHROME_STUB_TEAMS });
+    await page.goto(
+      "file:///" + path.join(FIXTURE_DIR, "teams-channel.html").replace(/\\/g, "/")
+    );
+    await page.addScriptTag({ path: path.join(SCRIPT_DIR, "teams-top.js") });
+    await waitPostMsgs(page, 1, 5000);
+    const count = (type) => page.evaluate((t) => window.__msgs.filter((m) => m.type === t).length, type);
+    const poke  = () => page.evaluate(() => document.body.appendChild(document.createElement("span")));
+    return { ctx, page, errors, count, poke };
+  }
+
+  await runTest("Clear stored data → unchanged channel is re-sent (context + posts)", async () => {
+    const { ctx, page, count } = await loadedChannel();
+    assert.strictEqual(await count("TP_POSTS"), 1);
+    await page.evaluate(() => window.__storageListeners.forEach((fn) =>
+      fn({ "tp:v1:class-index": { oldValue: ["x"] } }, "local")));
+    await waitPostMsgs(page, 2, 5000);
+    assert.strictEqual(await count("TP_POSTS"), 2, "posts not re-sent after clear");
+    assert.strictEqual(await count("TP_CLASS_CONTEXT"), 2, "class context not re-sent after clear");
+    await ctx.close();
+  });
+
+  await runTest("unrelated storage writes do not trigger a resend", async () => {
+    const { ctx, page, count } = await loadedChannel();
+    await page.evaluate(() => window.__storageListeners.forEach((fn) =>
+      fn({ "tp:v1:seen-hashes": { oldValue: {}, newValue: { a: 1 } } }, "local")));
+    await page.waitForTimeout(2500);
+    assert.strictEqual(await count("TP_POSTS"), 1);
+    await ctx.close();
+  });
+
+  await runTest("rejected TP_POSTS is retried on the next DOM change", async () => {
+    const ctx  = await browser.newContext();
+    const page = await ctx.newPage();
+    await page.addInitScript({ content: CHROME_STUB_TEAMS });
+    await page.addInitScript({ content: `
+      let rejected = false;
+      window.__reply = (m) => (m.type === "TP_POSTS" && !rejected) ? (rejected = true, { ok: false, reason: "test" }) : { ok: true };
+    ` });
+    await page.goto(
+      "file:///" + path.join(FIXTURE_DIR, "teams-channel.html").replace(/\\/g, "/")
+    );
+    await page.addScriptTag({ path: path.join(SCRIPT_DIR, "teams-top.js") });
+    await waitPostMsgs(page, 1, 5000);
+    await page.evaluate(() => document.body.appendChild(document.createElement("span")));
+    const msgs = await waitPostMsgs(page, 2, 5000);
+    assert.strictEqual(msgs.filter((m) => m.type === "TP_POSTS").length, 2, "rejected batch not retried");
+    await ctx.close();
+  });
+
+  await runTest("extension reloaded under the page → script stops without errors", async () => {
+    const { ctx, page, errors, count, poke } = await loadedChannel();
+    await page.evaluate(() => {
+      window.chrome.runtime.id = undefined;
+      window.chrome.runtime.sendMessage = () => { throw new Error("Extension context invalidated."); };
+    });
+    await page.evaluate(() => document.querySelector('[data-tid="subject-line"]').textContent = "Changed");
+    await page.waitForTimeout(2500);
+    await poke();
+    await page.waitForTimeout(2500);
+    assert.strictEqual(await count("TP_POSTS"), 1, "orphaned script kept sending");
+    assert.deepStrictEqual(errors, [], `page errors: ${errors.join("; ")}`);
+    await ctx.close();
+  });
+
+  // (6) Scraper health — fake clock, so the grace periods run instantly.
   async function healthPage(mutate) {
     const ctx  = await browser.newContext();
     const page = await ctx.newPage();
