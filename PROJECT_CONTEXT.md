@@ -18,7 +18,7 @@
   5. Storage & Deduplication Layer (SQLite via built-in `node:sqlite`, `db.js`, `teamspulse.db`) *(Completed)*
   6. Client Interface (Chrome/Edge Extension & Local Express API Server) *(Completed)*
   7. Zero-Install Distribution & Notification Channels *(Planned)*
-- **Planned Frontends**: Lightweight Chrome/Edge Extension (Manifest V3, localhost:3457 Express bridge) and optional 1-click portable desktop bundle / Web Store distribution.
+- **Frontends**: Standalone Chrome/Edge extension (Manifest V3, `chrome.storage.local`, no server — v0.6.0) and the optional self-host pipeline (Playwright + `digest.md` + Telegram + local JSON API on `127.0.0.1:3457`).
 
 ---
 
@@ -86,12 +86,12 @@ db.DB_PATH                     // absolute path to teamspulse.db
 
 ## 2.4. Client Interface & Local API Server (Step 5 — Completed)
 
-### Architecture: Chrome Extension + Local Express API
-Because Manifest V3 Chrome extensions cannot access the local filesystem or SQLite directly, a local Express API serves as the read-only bridge:
+### Architecture: Local Express API (self-host)
+Historically (≤ v0.5.0) the extension popup read this API over `localhost:3457`. Since v0.6.0 the extension is standalone (§2.5); the API remains for the self-host pipeline:
 
 ```
-[Chrome Extension popup]
-        ↕ fetch("http://localhost:3457/api/...")
+[any local client]
+        ↕ HTTP GET 127.0.0.1:3457/api/...
 [Local Express API server — server.js]
         ↕ node:sqlite / JSON reads
 [teamspulse.db + notices.json + assignments.json + digest-utils.js]
@@ -111,59 +111,67 @@ Because Manifest V3 Chrome extensions cannot access the local filesystem or SQLi
      - `GET /api/digest`: Assembles classes with categorized notices & assignments.
      - `GET /api/recent?hours=N`: Queries `posts` table from `teamspulse.db`.
    - CORS enabled for `chrome-extension://*` and `http://localhost`.
-3. **Chrome / Edge Extension (`extension/`)**:
-   - **`manifest.json`**: Manifest V3, zero background service worker overhead, host permissions scoped to `http://localhost:3457/*`. The `storage` permission is required for the persistent collapse state feature.
-   - **`popup.html` / `popup.css` / `popup.js`**:
-     - **380px** modern dark-theme dashboard (inspired by Linear / Teams dark mode).
-     - **Class-Based Categorization**: Notices and assignments grouped per enrolled class (`CSE 312`, `PHY 104`, etc.).
-     - **Category Switcher Tabs**: `All (N)` · `📢 Notices (N)` · `📝 Tasks (N)`.
-     - **Collapsible Filter Bar**: A 🔍 toggle button (`filterToggleBtn`) in the header shows/hides `.controls-bar` (class filter, time filter, search). Defaults to hidden on popup open; button carries `.active` and `aria-expanded` state. **Implemented** in `popup.html` + `popup.js` (`filterToggleBtn.addEventListener`).
-     - **Filters**: Class filter dropdown, Time filter (`All Time` default, `24h`, `48h`, `7d`).
-     - **Instant Search**: Real-time filtering across class names, tags, summaries, authors, and task titles.
-     - **Persistent Per-Class Collapse State**: Class card expanded/collapsed state is persisted to `chrome.storage.local` keyed by `c.key || c.rawClassName || c.className` (the stable raw class name). Applied synchronously before the card is painted to avoid a flash of wrong state. **Implemented** in `popup.js` (`getStoredCollapseState`, `saveCollapseState`, `collapseStatePromise`).
-     - **Live Sync**: Auto-polls every 15s with an animated `● Live` status badge and last sync ticker.
+3. **Browser extension (`extension/`)**: since v0.6.0 the extension **no longer reads this API** — it is standalone (see §2.5). `server.js` remains the JSON API for the self-host pipeline. Popup UI features (class grouping, All/Notices/Tasks tabs, collapsible filter bar, time filter, search, persisted per-class collapse state keyed by raw class name, 48 h due-soon highlight) are unchanged; the 15 s localhost polling was replaced by `chrome.storage.onChanged`.
    - **`icons/`**: Native PNG icons (`icon16.png`, `icon48.png`, `icon128.png`).
 
 ---
 
-## 2.5. Standalone Extension Architecture (Phase 1 + Phase 2 — `feat/standalone-extension`)
+## 2.5. Standalone Extension Architecture (v0.6.0 — on `main`)
 
 ### Goal
-Remove the Node.js / Express server dependency entirely. The extension reads Teams DOM directly via content scripts and stores data in `chrome.storage.local`.
+No Node.js / Express server for end users. Content scripts read the Teams pages the student already has open; data lives in `chrome.storage.local`; the popup and badge are computed in the browser. The extension makes **no network requests** (CSP `connect-src 'none'`; no `fetch`/XHR/WebSocket/`eval` in `extension/`).
 
 ### Data Flow
 
 ```mermaid
 flowchart LR
-    CS1["teams-top.js\n(content script, top frame)"] -->|TP_CLASS_CONTEXT\nTP_POSTS| SW["background.js\n(service worker)"]
-    CS2["assignments-frame.js\n(content script, all_frames)"] -->|TP_ASSIGNMENTS| SW
-    SW -->|handleMessage| MSG["core/messages.js\n(pure validator + router)"]
-    MSG -->|ingestPosts\ningestAssignments| STORE["core/store.js\n(createStore + chromeBackend)"]
-    STORE -->|chrome.storage.local\ntp:v1:* keys| CHROME[(chrome.storage.local)]
-    CHROME -->|getFullState| SHAPE["core/shape.js\n(buildDigest + buildStatus)"]
-    SHAPE --> POP["popup.js\n(Phase 3 — not yet wired)"]
+    CS1["teams-top.js\n(top frame)"] -->|TP_CLASS_CONTEXT\nTP_POSTS\nTP_HEALTH| SW["background.js\n(service worker)"]
+    CS2["assignments-frame.js\n(all_frames)"] -->|TP_ASSIGNMENTS| SW
+    SW -->|handleMessage| MSG["core/messages.js\n(validator + router)"]
+    MSG -->|ingestPosts / ingestAssignments / recordHealth| STORE["core/store.js"]
+    STORE --> CHROME[(chrome.storage.local\ntp:v1:* keys)]
+    CHROME -->|storage.onChanged| POP["popup.js\nbuildDigest + buildStatus"]
+    CHROME -->|storage.onChanged + 30-min alarm| BADGE["badge = newPostCount"]
+    POP -.->|tp:sync:cmd / tp:sync:status| CS1
 ```
+
+### Manifest (verbatim intent)
+- `permissions`: `["alarms", "storage", "unlimitedStorage"]` — no `host_permissions`, no `tabs`, no `scripting`.
+- `content_security_policy.extension_pages`: `script-src 'self'; object-src 'self'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'`.
+- Content-script matches: `https://teams.microsoft.com/*`, `https://teams.cloud.microsoft/*` (seen live 2026-10-01), `https://assignments.edu.cloud.microsoft/*` (iframe).
 
 ### Component Breakdown
 
-| File | Role | Phase |
-|------|------|-------|
-| `extension/core/digest-utils.js` | Dual-export parsing rules — `isNoteworthy`, `classify`, `extractDate`, `extractTime`, `filterRecentPosts` | Phase 1 ✅ |
-| `extension/core/fingerprint.js` | `fingerprintString`, async `sha256Hex` via SubtleCrypto | Phase 1 ✅ |
-| `extension/core/store.js` | `createStore(backend)`, `chromeBackend`, `memoryBackend`, promise-queued writes, 200-post cap | Phase 1 ✅ |
-| `extension/core/shape.js` | `buildDigest`, `buildStatus`, `transformPost`, `transformAssignment`, `compareAssignments` | Phase 1 ✅ |
-| `extension/core/messages.js` | Pure `handleMessage(msg, sender, deps)`: origin validation (two Teams origins + assignments origin), size limits (className≤200, posts≤500, assignments≤300, strings≤20k), tab-context join via `chrome.storage.session` | Phase 2 ✅ |
-| `extension/content/teams-top.js` | Top-frame content script. Debounced (1500ms) MutationObserver on `[data-tid="channel-pane-message"]`. Sends `TP_CLASS_CONTEXT` + `TP_POSTS`. `getCurrentClassName()` returns **null** — NOT VERIFIED (selector unknown; test hook: `window.__TP_TEST_CLASS`) | Phase 2 ✅ |
-| `extension/content/assignments-frame.js` | Cross-origin iframe script. `waitFor()` on MutationObserver. 3-tab loop (Upcoming / Past due / Completed), `extractCards()` with `getClientRects()` visibility filter, 60s cooldown | Phase 2 ✅ |
-| `extension/background.js` | `importScripts(...)`, `createStore(chromeBackend())`, session adapter over `chrome.storage.session`, `onMessage` listener, `tabs.onRemoved` cleanup. Phase 1 localhost polling kept for Phase 3 removal. | Phase 2 ✅ |
-| `extension/popup.js` | Still wired to localhost:3457 — to be ported in Phase 3 | Phase 3 🔲 |
+| File | Role |
+|------|------|
+| `extension/core/digest-utils.js` | Parsing rules shared with Node (`isNoteworthy`, `classify`, `extractDate`, `extractTime`, …). `extractDate` scans every word-date match; earliest real date wins. |
+| `extension/core/fingerprint.js` | `fingerprintString`, async `sha256Hex` (SubtleCrypto) — identical hashes to `db.js`. |
+| `extension/core/store.js` | `createStore(backend)`: promise-queued writes, 200-post cap, filter-first/dedup-second, `recordHealth`, `clearAll` (all `tp:v1:*`). |
+| `extension/core/shape.js` | `buildDigest`, `buildStatus` (same shapes as `server.js`) + `scraper` / `scraperIssues` (extension only). |
+| `extension/core/messages.js` | `handleMessage`: origin allowlist, size limits, tab-context join via `chrome.storage.session`, `TP_HEALTH` status allowlist. |
+| `extension/content/teams-top.js` | Class name, posts, health reports, Sync all classes, re-send after Clear, orphan shutdown. |
+| `extension/content/assignments-frame.js` | 3-tab loop → `TP_ASSIGNMENTS`; retries twice (3 s) while the class context is missing. |
+| `extension/background.js` | `importScripts` core, message router, `tabs.onRemoved` cleanup, badge (install, startup, storage change, 30-min alarm). Clears the legacy `teamspulse-badge-poll` alarm. |
+| `extension/popup.js` | Reads the store; live-updates on `storage.onChanged`; no-data / stale / scraper banners; Clear stored data (two-click confirm); Sync all classes. Scraped text only via `textContent`. |
 
-### Important Constraints
-- **Content scripts must not import from `core/`** — they are IIFE-wrapped and self-contained.
-- **No new `host_permissions`** — the extension does not fetch any external URLs.
-- **`chrome.storage.session`** holds ephemeral per-tab context (`tp:tabctx:<tabId>`); cleared when the tab closes via `tabs.onRemoved`.
-- **`getCurrentClassName()` is NOT VERIFIED** — it returns null in production until the user pastes the outerHTML of the Teams class-name element. The DOM test bypasses this with `window.__TP_TEST_CLASS`.
-- **Teams origins**: `https://teams.microsoft.com` is confirmed. `https://teams.cloud.microsoft` is **UNVERIFIED** — included in matches/origin checks and flagged in comments.
+### Class detection (Implemented: `getCurrentClassName()` in `teams-top.js`)
+Confirmed with `tools/dom-probe.js` on `teams.cloud.microsoft`: `document.title` is `Teams and Channels | <team name> | <channel> | Microsoft Teams` and the channel heading is `h2[data-tid="channelTitle-text"]`. The team name is the title segment immediately before the segment equal to the heading. If the two signals disagree → `null` → nothing sent (and a `no-class` health report after 10 s). The team name matched the `[data-testid="team-name"]` text exactly in live screenshots, so extension and self-host keys line up.
+
+### Sync all classes (Implemented: `syncAllClasses()` in `teams-top.js`)
+Selectors from `tools/dom-probe-teams-list.js`: grid `[data-tid="teams-grid-view"]`, classes `[data-tid="ClassTeamsSection-panel"] button[data-testid="team-name"]` (Hidden section excluded), app-bar Teams button `button[data-tid="2a84919f-59d8-4441-a975-2a8c2643b741"]`. Back navigation clicks the control whose text is exactly "All teams" (seen on screen; **not probed**), falling back to the app-bar button. The popup cannot message tabs without `tabs`, so it writes `tp:sync:cmd`; only the **visible** Teams tab runs it and reports `tp:sync:status`.
+
+### Scraper health (Implemented)
+`teams-top.js` reports once per onset: `no-class` (channel view on screen, class unresolved for 10 s) and `no-messages` (class resolved, zero messages for 60 s). `buildStatus` marks the scraper `suspect` while a report is newer than the relevant last successful capture; the popup shows "Scraper may be out of date. Check for an extension update."
+
+### Important constraints
+- **Content scripts must not import from `core/`** — IIFE-wrapped and self-contained.
+- **`importScripts` shares one global scope**: top-level `const`/`let` names in `background.js` and `core/*.js` must be unique (`test/background-load.test.js` enforces it).
+- **After an extension reload/update, already-open Teams tabs are orphaned** (Chrome doesn't re-inject). The script stops cleanly; the user must reload the Teams tab. Auto re-injection would need `scripting` + host permissions — **not added** (owner decision pending).
+- **Never add permissions, host matches, network calls or remote code without the owner's approval** (see `CLAUDE.md`).
+
+### Verification status (2026-10-01)
+- **Verified live**: post capture and class detection on `teams.cloud.microsoft` (2 classes, one account); service worker registration after the `_store` fix.
+- **Not verified live**: assignments capture, Sync all classes, "All teams" back navigation, health warnings, other locales/layouts.
 
 ---
 
@@ -284,7 +292,7 @@ flowchart TD
     Step3["3. Rule-Based Digest Builder — keyword/regex parsing, digest.md (✅ Complete)"]
     Step4["4. Storage & Deduplication Layer — SQLite, teamspulse.db (✅ Complete)"]
     Step5["5. Client Interface — Chrome/Edge Extension + Express API (✅ Complete)"]
-    Step6["6. Zero-Install Distribution / Pure Extension & Notifications (🔄 Next Up)"]
+    Step6["6. Zero-Install Distribution — standalone extension (🔄 v0.6.0 done, store release next)"]
     
     Step1 --> Step2 --> Step3 --> Step4 --> Step5 --> Step6
 ```
@@ -303,11 +311,11 @@ flowchart TD
 - **Persistent Per-Class Collapse State**: After user collapses/expands a class card, the state is written to `chrome.storage.local` as `{ collapsedClasses: { [classKey]: boolean } }`. On next popup open, `getStoredCollapseState()` resolves via `collapseStatePromise`, which is included in the `Promise.all` inside `loadData`. This guarantees the state is fully loaded before `applyFiltersAndRender` runs, so cards are created with the correct `.collapsed` class from the start — no post-render patch, no visible flash. Key is `c.key || c.rawClassName || c.className` (the raw Teams name), which is section-specific and therefore the correct deduplication key (as established by the `shortClassName` collapse test in `test/`).
 
 
-### Immediate Next Step: Zero-Install Distribution (Step 6)
-- Solve the friction barrier for non-technical students:
-  1. **Pure Chrome Web Store Extension**: Read directly from `teams.microsoft.com` tab in-browser, bypassing local Node.js / server altogether.
-  2. **1-Click Portable Bundle**: Double-click `.bat` launcher with portable embedded Node.js for zero-install friend sharing.
-  3. **Push Notifications**: Telegram bot push notifications (Implemented: notify.js, sendTelegram) or native desktop notifications for morning briefings.
+### Step 6: Zero-Install Distribution (🔄 in progress)
+- [x] **Standalone extension** (v0.6.0): reads Teams in-browser, no Node.js / server — see §2.5.
+- [ ] Live verification of assignments + Sync all classes; golden parity test vs `server.js`; extension E2E test.
+- [ ] Chrome Web Store packaging, store listing, `PRIVACY.md` (product name undecided — "Teams" may be a trademark issue).
+- [x] Telegram push (self-host): `notify.js`.
 
 ---
 
@@ -336,21 +344,26 @@ flowchart TD
 
 ## 7. Test Coverage
 
-### Unit Tests (`npm test` — `node --test`, 72 total, all passing)
+### Unit Tests (`npm test` — `node --test`, 84 total: 83 pass, 1 skipped placeholder)
 
-- **`test/digest-utils.test.js`**: `extractDate` (impossible dates, US-format fallback, ambiguous month words, leap years), `extractTime` (12h, 24h, ranges, dot separators), `classify`, `isNoteworthy`, `filterRecentPosts`, `truncate`, `escapeCell`, `shortClassName`, `sectionLabel`.
+- **`test/digest-utils.test.js`**: `extractDate` (impossible dates, US-format fallback, ambiguous month words, leap years, **every-match scan** — "CT-2 will be held on 5 October 2026", ordinals, month-first, earliest-date-wins), `extractTime`, `classify`, `isNoteworthy`, `filterRecentPosts`, `truncate`, `escapeCell`, `shortClassName`, `sectionLabel`.
 - **`test/hash-post.test.js`**: `db.hashPost` parity, fingerprint tuple collision checks, body capping at 500 chars.
-- **`test/assignment-sort.test.js`**: assignment date extraction (`dueDate`, `dueTime`, `dueIso`) and ascending sort verification (soonest first, undated tasks last).
-- **`test/notify.test.js`**: Telegram bot push chunking (4000 char limit), unconfigured env safety, redacting bot tokens.
-- **`test/core.test.js`**: Phase 1 browser-safe core tests: fingerprint parity (`async hashPost === db.hashPost` across sample posts), store deduplication, filtered-out post non-burning, in-batch duplicate handling, concurrent ingest safety, shape data structures, newHours clamping, health staleness thresholds, and assignment sorting.
-- **`test/messages.test.js`** *(Phase 2)*: 12 tests covering `handleMessage` — valid `TP_CLASS_CONTEXT` (both Teams origins), valid `TP_POSTS` ingested into store, wrong origin rejected for all three message types, oversize `className` (>200 chars) rejected, `posts` array >500 rejected, `assignments` array >300 rejected, string field >20,000 chars rejected, `TP_ASSIGNMENTS` without prior class context dropped, `TP_ASSIGNMENTS` with context lands under correct class.
+- **`test/assignment-sort.test.js`**: assignment date extraction and ascending sort (soonest first, undated last).
+- **`test/notify.test.js`**: Telegram chunking, unconfigured env safety, token redaction.
+- **`test/core.test.js`**: fingerprint parity (`async hashPost === db.hashPost`), store dedup, filtered-out posts not burned, in-batch duplicates, concurrent ingest, shape structures, newHours clamping, staleness, assignment sorting.
+- **`test/messages.test.js`**: `handleMessage` origin/size/context validation for `TP_CLASS_CONTEXT`, `TP_POSTS`, `TP_ASSIGNMENTS`.
+- **`test/scrape-health.test.js`**: `TP_HEALTH` validation, `store.recordHealth`, `buildStatus().scraper` — problems clear on a newer successful capture; `clearAll` wipes them.
+- **`test/background-load.test.js`**: loads `background.js` + all `importScripts` files into **one** vm context (as Chrome does) — catches duplicate top-level `const` names, which kill the service worker ("status code 15"). Also checks alarms + badge on install.
+- **`test-dom/popup-xss.test.js`** registers a skipped placeholder under `node --test`; it runs under `npm run test:dom`.
 
-### DOM / Integration Tests (`npm run test:dom` — Playwright headless Chromium, 4 tests, all passing)
+### DOM / Integration Tests (`npm run test:dom` — Playwright headless Chromium, 16 tests, all passing)
 
-> **Note**: These fixtures prove port logic only — they do not verify compatibility with the live Teams DOM.
+> **Note**: fixtures prove logic only, not compatibility with the live Teams DOM. Fixture shapes come from `tools/dom-probe*.js` output.
 
-- `teams-top.js` fixture with 2 posts → one `TP_POSTS` message with 2 posts
-- `teams-top.js` 3rd post added dynamically → new `TP_POSTS` fires after the 1500ms debounce
-- `teams-top.js` empty post list → no `TP_POSTS` message sent
-- `assignments-frame.js` 3-tab fixture → one `TP_ASSIGNMENTS` with all cards from all three tabs; original tab restored
-
+- `teams-top.js`: 2-post fixture → `TP_POSTS` with class from `document.title`; dynamic 3rd post → new `TP_POSTS` after debounce; empty list → nothing sent
+- class detection: title/heading mismatch sends nothing; SPA class switch re-sends context
+- reliability: Clear stored data → re-send; unrelated storage writes → no re-send; rejected `TP_POSTS` retried; orphaned script (extension reloaded) stops without page errors
+- Sync all classes: visits every class in the Classes panel (hidden teams skipped), one `TP_POSTS` per class under the right name, returns to the grid
+- health (Playwright fake clock): no-class after 10 s, no-messages after 60 s, healthy channel never reports
+- `assignments-frame.js`: 3-tab fixture → one `TP_ASSIGNMENTS`; original tab restored
+- popup: XSS payloads render as literal text (no `<img>`, dialog or request); stale banner; Clear stored data wipes `tp:v1:*`, tab contexts and badge; scraper banner

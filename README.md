@@ -3,7 +3,19 @@
 > **Turn chaotic Microsoft Teams courses into a clean, automated academic briefing.**  
 > Scrapes classes, tracks assignments, extracts Class Test (CT) dates, and delivers a unified daily digest — showing only what's **new since the last run**.
 > 
-> **⚡ Phase 2 of the standalone extension complete on `feat/standalone-extension`.** Content scripts, message router, and DOM test suite all passing. Phase 3 next (popup wired to standalone path).
+> **Status (2026-10-01):** the browser extension now works on its own — no server, no Node.js. Live capture of channel posts has been seen working on `teams.cloud.microsoft` for one student account. Assignment capture and "Sync all classes" have only been tested against local mock pages so far. Not yet on the Chrome Web Store.
+
+---
+
+## 🧩 Install (no server needed)
+
+1. Download this repo (Code → Download ZIP) and unzip it.
+2. Open `chrome://extensions` (or `edge://extensions`) and turn on **Developer mode**.
+3. Click **Load unpacked** and choose the `extension/` folder.
+4. Open Microsoft Teams in that browser (reload the tab if it was already open) and visit your classes — or click **Sync all classes** in the popup.
+5. Click the ⚡ icon for your briefing. Everything stays in your browser; the extension makes no network requests.
+
+Self-hosting the Playwright scraper, digest and Telegram bot is optional — see [Advanced: self-host](#-advanced-self-host-playwright--digest--telegram).
 
 ---
 
@@ -20,9 +32,26 @@ University students live inside Microsoft Teams, but finding what actually matte
 
 ## 💡 The Solution
 
-**TeamsPulse** automates Microsoft Teams using Playwright and your own student session. It navigates your classes in the background, extracts structured assignment and announcement data, deduplicates across runs, and transforms noisy chat feeds into an actionable daily briefing.
+**TeamsPulse** reads the Teams pages you already have open in your own browser session, extracts structured assignment and announcement data, deduplicates across visits, and turns noisy chat feeds into an actionable briefing. It ships two ways: a standalone browser extension (recommended), and an optional self-hosted Playwright pipeline.
 
-### Current architecture (server-assisted mode — fully working)
+### Standalone extension (default)
+
+```mermaid
+flowchart LR
+    CS1[Content script\nTeams tab] -->|chrome.runtime.sendMessage| SW[Service worker\nbackground.js]
+    CS2[Content script\nAssignments iframe] -->|chrome.runtime.sendMessage| SW
+    SW -->|validate origin + size| CORE[extension/core/]
+    CORE --> ST[(chrome.storage.local\ntp:v1:* keys)]
+    ST -->|storage.onChanged| POP[popup.js\nbuildDigest + buildStatus]
+    ST --> BADGE[Toolbar badge\nnew posts]
+    POP -.->|tp:sync:cmd| CS1
+```
+
+- Permissions: `alarms`, `storage`, `unlimitedStorage`. No host permissions, no `tabs`.
+- CSP for extension pages: `connect-src 'none'` — the popup cannot make network requests.
+- Content scripts run only on `teams.microsoft.com`, `teams.cloud.microsoft` and `assignments.edu.cloud.microsoft`.
+
+### Self-host pipeline (advanced, optional)
 
 ```mermaid
 flowchart LR
@@ -34,20 +63,10 @@ flowchart LR
     E -->|new posts only| F[Digest Builder]
     F --> G[digest.md — Daily Briefing]
     F -->|Telegram| H[📱 Push Notification]
-    E -->|Express API :3457| I[Chrome Extension popup]
+    E -->|Express API :3457| I[JSON API /api/digest, /api/status]
 ```
 
-### Standalone extension architecture (in progress — `feat/standalone-extension`)
-
-```mermaid
-flowchart LR
-    CS1[Content Script\nTeams tab] -->|chrome.runtime.sendMessage| SW[Service Worker\nbackground.js]
-    CS2[Content Script\nAssignments iframe] -->|chrome.runtime.sendMessage| SW
-    SW --> CORE[extension/core/]
-    CORE --> ST[(chrome.storage.local\ntp:v1:* keys)]
-    ST -->|getFullState| SH[shape.js\nbuildDigest + buildStatus]
-    SH --> POP[popup.js]
-```
+Both paths share the same parsing rules (`extension/core/digest-utils.js`) and post fingerprint (`extension/core/fingerprint.js`).
 
 ---
 
@@ -60,12 +79,11 @@ flowchart LR
 - [x] **Rule-Based Digest**: Keyword + regex classification (CT/Quiz, Exam, Deadline, Grades, Reschedule, Cancelled) — no AI required, works offline.
 - [x] **Storage & Deduplication**: SQLite (`teamspulse.db`) stores a SHA-256 fingerprint for every processed post. On the next run, already-seen posts are silently skipped — only genuinely new content appears in the digest.
 - [x] **Resilient UI Selectors**: Bypasses unstable Fluent UI atomic class names by anchoring to semantic `data-testid` / `data-test` / ARIA attributes.
-- [x] **Chrome / Edge Extension**: Quick popup showing today's deadlines, upcoming CTs, and new notices (served by the local API on port 3457).
-- [x] **Telegram Bot**: Morning briefing push notifications.
-- [x] **Browser-safe core** (`extension/core/`): `fingerprint.js`, `store.js`, `shape.js` — SubtleCrypto, `chrome.storage.local`, zero Node-only APIs. (Phase 1 ✅)
-- [x] **Content scripts**: `teams-top.js` (debounced MO, TP_POSTS) + `assignments-frame.js` (3-tab loop, TP_ASSIGNMENTS). (Phase 2 ✅)
-- [x] **Message router** (`extension/core/messages.js`): origin validation, size limits, tab-context joining, pure/testable. (Phase 2 ✅)
-- [ ] **Standalone Extension popup**: Popup wired to `chrome.storage.local` — no server or Node.js required for end users. (Phase 3)
+- [x] **Standalone Chrome / Edge extension**: popup reads `chrome.storage.local` — no server or Node.js. Live-updates as you browse Teams; toolbar badge counts new posts (24 h window).
+- [x] **Sync all classes**: one click opens each class in your Teams tab, captures it, and returns you where you were (hidden teams skipped). *Not yet tested on live Teams.*
+- [x] **Scraper health**: if Teams changes its page and capture stops working, the popup says "Scraper may be out of date" instead of quietly showing old data.
+- [x] **Clear stored data**: one button wipes everything the extension stored.
+- [x] **Telegram Bot** (self-host): morning briefing push notifications.
 
 ---
 
@@ -74,35 +92,30 @@ flowchart LR
 ```
 teampulse/
 ├── extension/
-│   ├── core/                        ← browser-safe shared modules (Phase 1 ✅)
-│   │   ├── digest-utils.js          ← canonical copy of parsing rules (dual export)
+│   ├── core/                        ← browser-safe shared modules (dual export: Node + browser)
+│   │   ├── digest-utils.js          ← canonical parsing rules (classify, extractDate, …)
 │   │   ├── fingerprint.js           ← SubtleCrypto SHA-256, fingerprintString
-│   │   ├── store.js                 ← chrome.storage.local store + memoryBackend
-│   │   ├── messages.js              ← pure handleMessage (origin + size validation) (Phase 2 ✅)
-│   │   └── shape.js                 ← buildDigest, buildStatus, transformPost, …
-│   ├── content/                     ← MV3 content scripts (Phase 2 ✅)
-│   │   ├── teams-top.js             ← debounced MO → TP_CLASS_CONTEXT + TP_POSTS
-│   │   └── assignments-frame.js     ← 3-tab loop → TP_ASSIGNMENTS (60s cooldown)
-│   ├── manifest.json                ← MV3 manifest
-│   ├── background.js                ← service worker: importScripts + onMessage + tabs.onRemoved
+│   │   ├── store.js                 ← chrome.storage.local store, scrape-health records
+│   │   ├── messages.js              ← handleMessage: origin + size validation, TP_* router
+│   │   └── shape.js                 ← buildDigest, buildStatus (+ scraper health)
+│   ├── content/
+│   │   ├── teams-top.js             ← class detection, posts, health, "Sync all classes"
+│   │   └── assignments-frame.js     ← 3-tab loop → TP_ASSIGNMENTS
+│   ├── manifest.json                ← MV3, alarms/storage/unlimitedStorage, strict CSP
+│   ├── background.js                ← service worker: message router + badge
 │   ├── popup.html / popup.css / popup.js
 │   └── icons/
-├── test/
-│   ├── core.test.js                 ← Phase 1 tests (fingerprint parity, store, shape)
-│   ├── messages.test.js             ← Phase 2 tests: 12 origin/size/context tests (node:test)
-│   ├── assignment-sort.test.js
-│   ├── digest-utils.test.js
-│   ├── hash-post.test.js
-│   └── notify.test.js
-├── test-dom/                        ← Playwright DOM tests (NOT part of node --test)
-│   ├── runner.js                    ← 4 headless Chromium tests
-│   └── fixtures/
-│       ├── teams-channel.html       ← 2-post channel fixture
-│       └── assignments.html         ← 3-tab assignments fixture
+├── tools/
+│   ├── dom-probe.js                 ← read-only console probe: channel view
+│   └── dom-probe-teams-list.js      ← read-only console probe: classes grid
+├── test/                            ← node --test unit tests
+├── test-dom/                        ← Playwright DOM tests (npm run test:dom)
+│   ├── runner.js / popup-xss.test.js
+│   └── fixtures/                    ← channel, classes-grid and assignments mock pages
 ├── db.js                            ← SQLite layer (Node only; hashPost delegates to fingerprint.js)
 ├── digest-utils.js                  ← one-line shim → extension/core/digest-utils.js
 ├── build-digest.js                  ← CLI digest builder
-├── server.js                        ← local Express API (server-assisted mode)
+├── server.js                        ← local Express JSON API (self-host)
 ├── teams.js / scrape-posts.js       ← Playwright scrapers
 ├── notify.js                        ← Telegram push
 └── PROJECT_CONTEXT.md               ← full technical architecture (read this first)
@@ -110,7 +123,9 @@ teampulse/
 
 ---
 
-## 🚀 Quickstart
+## 🛠 Advanced: self-host (Playwright + digest + Telegram)
+
+Optional. Runs the scraper on your machine on a schedule and produces `digest.md`, a Telegram push and a local JSON API. Not needed for the extension.
 
 ### 1. Prerequisites
 - **Node.js** v24 or higher — the dedup store uses the built-in `node:sqlite`
@@ -182,35 +197,22 @@ Run unit tests with `npm test` (72 tests, all passing). Run DOM/integration test
 
 ---
 
-## 🧩 Chrome Extension — Current Setup (server-assisted)
+### Local JSON API
 
-TeamsPulse includes a lightweight Chrome/Edge Extension (Manifest V3) that provides a fast, dark-themed academic briefing popup without needing to open Microsoft Teams.
+`npm run server` serves the self-hosted data at `http://127.0.0.1:3457` (`/api/digest`, `/api/status`).
+Since v0.6.0 the browser extension no longer reads this API — it keeps its own data in the browser.
 
-### Setup Instructions
-1. **Start the local API server**:
-   ```bash
-   npm run server
-   ```
-   This serves your scraped notices and assignments locally at `http://localhost:3457`.
+---
 
-2. **Install the extension in your browser**:
-   - Open Chrome or Edge and navigate to `chrome://extensions`
-   - Enable **Developer mode** (toggle in the top-right corner)
-   - Click **Load unpacked**
-   - Select the `extension/` folder inside your TeamsPulse directory
+## 🧩 Popup features
 
-3. **Pin & Use**:
-   - Pin the ⚡ **TeamsPulse** extension to your browser toolbar.
-   - Click the extension icon to view today's deadlines, upcoming CTs/quizzes, and class announcements.
-
-### Features
 * 📚 **Categorized by Class**: Notices and assignments grouped under each enrolled course.
 * 📑 **Category Switcher**: Tabs for **All**, **📢 Notices**, and **📝 Tasks**.
 * 🔍 **Collapsible Filter Bar**: Class/time filters and search, hidden by default.
-* 🎯 **Instant Search**: Real-time filtering across classes, tags, summaries, authors.
-* 🟢 **Live Auto-Sync**: Polls every 15s with animated `● Live` badge and last sync ticker.
+* 🟢 **Fresh / Stale pill**: "Data is old" banner after 36 h without a capture.
+* 🔄 **Sync all classes** and **Clear stored data** buttons.
 * ⏳ **Due-Soon Urgency**: Assignments due within 48 h get an amber highlight.
-* 💾 **Remembered Collapse State**: Expanded/collapsed state persisted via `chrome.storage.local`.
+* 🛡️ **Untrusted text stays text**: scraped posts are rendered with `textContent` only (tested with XSS payloads).
 
 ---
 
@@ -262,26 +264,21 @@ surfaced posts count as seen, so loosening the classifier later can still recove
 - [x] Rule-based digest builder — keyword + regex classification.
 - [x] **SQLite storage & deduplication** — SHA-256 fingerprint per post, skips seen items.
 
-### ✅ Phase 3: Client Interface (server-assisted)
-- [x] **Chrome / Edge Extension**: Fast popup via local API server on port 3457.
+### ✅ Phase 3: Client Interface
 - [x] **Telegram Push**: Morning briefing via `notify.js`.
 
-### 🔄 Phase 4: Standalone Extension (Phase 2 complete — `feat/standalone-extension`)
-- [x] `extension/core/digest-utils.js` — canonical dual-export parsing module
-- [x] `extension/core/fingerprint.js` — `fingerprintString` + async `sha256Hex` (SubtleCrypto)
-- [x] `extension/core/store.js` — `createStore(backend)` with `chromeBackend` + `memoryBackend`, promise-queued writes, 200-post cap, filter-first/dedup-second semantics
-- [x] `extension/core/shape.js` — `buildDigest`, `buildStatus`, `transformPost`, `transformAssignment`, `compareAssignments`
-- [x] `test/core.test.js` — 60 node:test unit tests (Phase 1 core)
-- [x] `extension/content/teams-top.js` — debounced MutationObserver, `TP_CLASS_CONTEXT` + `TP_POSTS`
-- [x] `extension/content/assignments-frame.js` — 3-tab loop, `TP_ASSIGNMENTS`, 60 s cooldown
-- [x] `extension/core/messages.js` — pure `handleMessage`: origin + size validation, tab-context join
-- [x] `background.js` updated — `importScripts`, `onMessage` router, `tabs.onRemoved` cleanup
-- [x] `test/messages.test.js` — 12 node:test tests (72 total, all passing)
-- [x] `test-dom/` — 4 Playwright headless DOM tests (`npm run test:dom`)
-- [ ] Popup wired to `chrome.storage.local` (standalone path, no localhost) (Phase 3)
+### ✅ Phase 4: Standalone Extension (v0.6.0)
+- [x] Browser-safe core (`extension/core/`), shared with the Node pipeline
+- [x] Content scripts + validated message router; class detected from the page title + channel heading
+- [x] Popup and badge read `chrome.storage.local`; no localhost, no host permissions, strict CSP
+- [x] Scraper-health warning, Clear stored data, Sync all classes
+- [x] Tests: 83 unit (`npm test`) + 16 Playwright DOM tests (`npm run test:dom`)
+- [ ] Verify on live Teams: assignments capture, Sync all classes, "All teams" back navigation
+- [ ] Golden test: extension output vs `server.js` for the same data
+- [ ] Extension end-to-end test with the unpacked extension loaded
 
 ### 🔲 Phase 5: Distribution
-- [ ] **Chrome Web Store**: Packaged standalone extension (no server required for end users).
+- [ ] **Chrome Web Store**: packaged zip, store listing, `PRIVACY.md` (product name still to be decided — "Teams" in the name may be rejected).
 - [ ] **1-Click Portable Runner**: Double-click `.bat` with embedded portable Node.
 
 ---
