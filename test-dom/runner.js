@@ -336,6 +336,8 @@ async function main() {
     assert.strictEqual(status.total, 3);
     assert.strictEqual(status.done, 3);
     assert.strictEqual(status.failed, 0);
+    assert.strictEqual(status.assignments, "ok", "Assignments app opened and capture awaited");
+    assert.strictEqual(await page.evaluate(() => window.__assignmentsOpened), 1);
 
     const visited = await page.evaluate(() => window.__visited);
     assert.ok(!visited.includes("Old_2025_CSE 101"), "hidden team was visited");
@@ -493,6 +495,28 @@ async function main() {
     assert.strictEqual(by["CLP-02"].className, "Summer_2026_CSE 304 (V1)_242_D1");
     assert.strictEqual(by["Final Project"].dueDate, "2026-12-30", "Upcoming → next occurrence");
     assert.strictEqual(by["Final Project"].tab, "Upcoming");
+    assert.strictEqual(by["Project Submission"].tab, "Past due", "stale cards must not be labelled with the next tab");
+    assert.strictEqual(by["Project Submission"].details, "Due at 11:59 PM", "details = due line only");
+    await ctx.close();
+  });
+
+  // Live bug: Upcoming empty → the scraper read the still-visible past-due
+  // cards as "Upcoming" (46 = 2 × 23). Each card must appear once, correctly tabbed.
+  await runTest("all-classes view, empty Upcoming: no stale cards recorded as Upcoming, no duplicates", async () => {
+    const ctx  = await browser.newContext({ timezoneId: "UTC" });
+    const page = await ctx.newPage();
+    await page.route("https://assignments.test/**", (route) => route.fulfill({
+      contentType: "text/html",
+      body: require("fs").readFileSync(path.join(FIXTURE_DIR, "assignments-all.html"), "utf8"),
+    }));
+    await page.addInitScript({ content: CHROME_STUB_ASSIGNMENTS });
+    await page.goto("https://assignments.test/classes/all/list?emptyUpcoming=1");
+    await page.addScriptTag({ path: path.join(SCRIPT_DIR, "assignments-frame.js") });
+
+    const m = (await waitAssignMsgs(page, 1, 30000)).find((x) => x.type === "TP_ASSIGNMENTS");
+    assert.ok(m, "no TP_ASSIGNMENTS");
+    const tabs = m.assignments.map((a) => `${a.title}:${a.tab}`).sort();
+    assert.deepStrictEqual(tabs, ["CLP-02:Past due", "Project Proposal:Completed", "Project Submission:Past due"]);
     await ctx.close();
   });
 

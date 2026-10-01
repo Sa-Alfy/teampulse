@@ -10,6 +10,10 @@
     tools/dom-probe-teams-list.js + tools/dom-probe.js output (2026-10-01).
     DISCLAIMER: proves sync logic only, not compatibility with the real Teams DOM.
   -->
+  <div role="navigation" aria-label="Apps">
+    <button id="appTeams" data-tid="2a84919f-59d8-4441-a975-2a8c2643b741" aria-label="Teams (Ctrl+Shift+1)">Teams</button>
+    <button id="appAssignments" aria-label="Assignments (Ctrl+Shift+4)">Assignments</button>
+  </div>
   <div id="app"></div>
   <script>
     const CLASSES = ["Summer_2026_CSE 303 (V1)_242_D4", "Summer_2026_CSE 311 (V1)_ 232_D2", "MAT 103 D1; Summer 2026"];
@@ -59,6 +63,17 @@
       msg.appendChild(el("div", { "data-tid": "message-body" }, `Exam for ${name} on 5 October 2026`));
       app.appendChild(msg);
     }
+    // Left bar: Teams → grid. Assignments → the app view; its (cross-origin)
+    // frame script would store a capture, simulated as a storage change.
+    window.__assignmentsOpened = 0;
+    document.getElementById("appTeams").addEventListener("click", () => setTimeout(showGrid, 300));
+    document.getElementById("appAssignments").addEventListener("click", () => {
+      window.__assignmentsOpened++;
+      document.title = "Assignments | Microsoft Teams";
+      app.replaceChildren(el("div", {}, "Assignments app"));
+      setTimeout(() => (window.__storageListeners || []).forEach((fn) =>
+        fn({ "tp:v1:assignments:MAT 103 D1; Summer 2026": { newValue: [] } }, "local")), 1000);
+    });
     showGrid();
   </script>
 </body>

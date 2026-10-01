@@ -76,10 +76,16 @@
 (() => {
   const panels = { "Upcoming": "panel-upcoming", "Past due": "panel-pastdue", "Completed": "panel-completed" };
   const tabs = document.querySelectorAll("[role='tab']");
+  // ?emptyUpcoming=1 → no upcoming assignments (the live account's case).
+  if (/emptyUpcoming=1/.test(location.search)) document.getElementById("panel-upcoming").replaceChildren();
+  // Like live Teams: the tab reports selected at once, but the previous tab's
+  // cards stay on screen ~600 ms before the list swaps.
   tabs.forEach((tab) => tab.addEventListener("click", () => {
     const name = tab.getAttribute("data-test");
     tabs.forEach((t) => t.setAttribute("aria-selected", t === tab ? "true" : "false"));
-    for (const [k, id] of Object.entries(panels)) document.getElementById(id).style.display = k === name ? "" : "none";
+    setTimeout(() => {
+      for (const [k, id] of Object.entries(panels)) document.getElementById(id).style.display = k === name ? "" : "none";
+    }, 600);
   }));
 })();
 </script>

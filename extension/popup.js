@@ -669,9 +669,14 @@ function renderSyncStatus(s) {
   if (!s || abandoned) { syncStatus.textContent = ""; syncAllBtn.disabled = false; return; }
   if (syncWatchdog) { clearTimeout(syncWatchdog); syncWatchdog = null; }
   if (s.state === "running") {
-    syncStatus.textContent = s.total ? `Syncing ${s.done + s.failed + 1} of ${s.total}…` : "Syncing…";
+    syncStatus.textContent = s.phase === "assignments" ? "Capturing assignments…"
+      : s.total ? `Syncing ${s.done + s.failed + 1} of ${s.total}…` : "Syncing…";
   }
-  else if (s.state === "done") syncStatus.textContent = `Synced ${s.done} of ${s.total} classes` + (s.failed ? ` (${s.failed} failed)` : "");
+  else if (s.state === "done") {
+    syncStatus.textContent = `Synced ${s.done} of ${s.total} classes` + (s.failed ? ` (${s.failed} failed)` : "") +
+      (s.assignments === "ok" ? " + assignments."
+        : s.assignments ? " — assignments not captured; open the Assignments app once." : ".");
+  }
   else if (s.state === "error") syncStatus.textContent = SYNC_REASONS[s.reason] || "Sync failed.";
   syncAllBtn.disabled = s.state === "running";
 }

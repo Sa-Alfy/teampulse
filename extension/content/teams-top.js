@@ -368,7 +368,34 @@
   const NAV_TIMEOUT_MS      = 20_000;
   const SETTLE_MS           = 2_500;
 
+  // Left-bar app buttons live in nav[aria-label="Apps"] with aria-labels like
+  // "Teams (Ctrl+Shift+1)" (probe). The Assignments button is matched the same
+  // way — NOT yet seen in a probe; English UI only.
+  const APPS_NAV_SEL         = '[role="navigation"][aria-label="Apps"]';
+  const ASSIGNMENTS_LABEL    = /^assignments\b/i;
+  const ASSIGNMENTS_WAIT_MS  = 60_000;
+  const ASSIGNMENT_KEY_PFX   = "tp:v1:assignments:";
+
   let _syncing = false;
+  let _assignmentWaiters = [];
+
+  function assignmentsAppButton() {
+    const nav = document.querySelector(APPS_NAV_SEL);
+    return Array.from((nav || document).querySelectorAll("button"))
+      .find((b) => ASSIGNMENTS_LABEL.test(b.getAttribute("aria-label") || "")) || null;
+  }
+
+  /** @returns {Promise<"ok"|"no-button"|"timeout">} */
+  async function syncAssignmentsApp() {
+    const btn = assignmentsAppButton();
+    if (!btn) return "no-button";
+    const stored = new Promise((resolve) => {
+      _assignmentWaiters.push(resolve);
+      setTimeout(() => resolve(false), ASSIGNMENTS_WAIT_MS);
+    });
+    btn.click();
+    return (await stored) ? "ok" : "timeout";
+  }
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -395,7 +422,9 @@
       back.click();
       if (await waitFor(() => document.querySelector(GRID_SELECTOR), 8000)) return true;
     }
-    const appBtn = document.querySelector(TEAMS_APP_BTN_SEL);
+    const nav = document.querySelector('[role="navigation"][aria-label="Apps"]');
+    const appBtn = document.querySelector(TEAMS_APP_BTN_SEL) ||
+      (nav && Array.from(nav.querySelectorAll("button")).find((b) => /^teams\b/i.test(b.getAttribute("aria-label") || "")));
     if (appBtn) appBtn.click();
     return waitFor(() => document.querySelector(GRID_SELECTOR), NAV_TIMEOUT_MS);
   }
@@ -411,6 +440,7 @@
     _syncing = true;
     const startClass = getCurrentClassName();
     let done = 0, failed = 0, total = 0;
+    let assignments = "skipped";
     writeSyncStatus({ state: "running", done, failed, total });
     try {
       if (!(await goToGrid())) {
@@ -440,12 +470,18 @@
         done++;
       }
 
+      // Assignments for every class live in the left-bar Assignments app
+      // (all-classes list). Open it so its frame script captures them, wait
+      // until they are stored, then come back.
+      writeSyncStatus({ state: "running", phase: "assignments", done, failed, total });
+      assignments = await syncAssignmentsApp();
+
       // Return the user to where they started: their class, or the grid.
       if (await goToGrid()) {
         const btn = startClass && classButtons().find((b) => normWs(b.textContent || "") === startClass);
         if (btn) btn.click();
       }
-      writeSyncStatus({ state: "done", done, failed, total });
+      writeSyncStatus({ state: "done", done, failed, total, assignments });
     } catch (_) {
       writeSyncStatus({ state: "error", reason: "unexpected", done, failed, total });
     } finally {
@@ -464,6 +500,13 @@
       const cmd = changes[SYNC_CMD_KEY];
       if (cmd && cmd.newValue && document.visibilityState === "visible") {
         syncAllClasses();
+      }
+      // The assignments frame stored a capture → release a waiting sync.
+      if (_assignmentWaiters.length &&
+          Object.keys(changes).some((k) => k.startsWith(ASSIGNMENT_KEY_PFX) && changes[k].newValue !== undefined)) {
+        const waiters = _assignmentWaiters;
+        _assignmentWaiters = [];
+        waiters.forEach((r) => r(true));
       }
       const wiped = Object.entries(changes).some(
         ([k, c]) => k.startsWith("tp:v1:") && c.newValue === undefined

@@ -129,12 +129,27 @@ function extractGuid(rawId) {
  * @param {string} tabName
  * @returns {object[]}
  */
+const EMPTY_TAB_WAIT_MS = 4_000;
+
+function visibleCards() {
+  return Array.from(document.querySelectorAll('[data-test="assignment-card"]'))
+    .filter((el) => el.getClientRects().length > 0);
+}
+
+function visibleCardIds() {
+  return new Set(visibleCards().map((el) => el.getAttribute("id") || el.textContent));
+}
+
+function sameIds(a, b) {
+  if (a.size !== b.size) return false;
+  for (const x of a) if (!b.has(x)) return false;
+  return true;
+}
+
 function extractCards(tabName) {
-  const cards   = Array.from(document.querySelectorAll('[data-test="assignment-card"]'));
-  // In the real Teams app, inactive tabs' cards are unmounted.
-  // In test fixtures, inactive panels are styled display:none.
-  const visible = cards.filter((el) => el.getClientRects().length > 0);
-  const targetCards = visible.length > 0 ? visible : cards;
+  // Visible cards only. Never fall back to hidden ones: those belong to
+  // another tab and would be recorded under the wrong tab name.
+  const targetCards = visibleCards();
   const results = [];
 
   for (const card of targetCards) {
@@ -172,7 +187,9 @@ function extractCards(tabName) {
       assignmentId,
       rawId,
       title,
-      details:      desc,
+      // All-up cards: the description block is "Due at …" + class name run
+      // together; keep just the due line (class is stored separately).
+      details:      allUp.className ? allUp.dueText : desc,
       dueRaw:       dueRaw || rawText || null,
       dueDate,      // null → resolved by shape layer (extractDate)
       status:       action,
@@ -276,10 +293,17 @@ async function scrape() {
   const originalTab = selectedTabName();
 
   const assignments = [];
+  const seenIds = new Set();
 
   for (const tabName of TABS) {
     const tabEl = findTabEl(tabName);
     if (!tabEl) continue;
+
+    // Teams keeps the previous tab's cards on screen for a moment after a tab
+    // switch; reading then mislabels them (live: 23 past-due cards were also
+    // recorded as "Upcoming"). Remember what was shown before switching.
+    const wasSelected = selectedTabName() === tabName;
+    const before = visibleCardIds();
 
     // Click the tab (the ONLY click performed by this script).
     tabEl.click();
@@ -293,15 +317,31 @@ async function scrape() {
       8_000
     );
 
-    // 2. Wait for the panel to settle (cards or empty text).
+    // 2. Wait for the panel to settle (cards or empty text) AND, after a real
+    //    switch, for the visible cards to differ from the previous tab's.
+    //    An assignment is only ever in one tab, so an unchanged non-empty set
+    //    means stale content: skip the tab rather than mislabel it.
     await waitFor(panelSettled, WAIT_TIMEOUT_MS);
+    if (!wasSelected) {
+      // Empty → empty is a genuinely empty tab, so that wait is kept short.
+      const changed = await waitFor(() => !sameIds(visibleCardIds(), before),
+        before.size > 0 ? WAIT_TIMEOUT_MS : EMPTY_TAB_WAIT_MS);
+      if (!changed && before.size > 0) {
+        console.warn(`[TeamsPulse] "${tabName}" still showed the previous tab's cards; skipped`);
+        continue;
+      }
+    }
 
     // Brief extra settle to let React flush.
     await new Promise((r) => setTimeout(r, SETTLE_MS));
 
-    // 3. Extract cards.
-    const cards = extractCards(tabName);
-    for (const c of cards) assignments.push(c);
+    // 3. Extract cards (an assignment is recorded once, under its first tab).
+    for (const c of extractCards(tabName)) {
+      const id = c.assignmentId || c.rawId;
+      if (id && seenIds.has(id)) continue;
+      if (id) seenIds.add(id);
+      assignments.push(c);
+    }
   }
 
   // Restore the originally selected tab.
