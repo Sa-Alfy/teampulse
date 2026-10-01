@@ -357,8 +357,16 @@ function buildStatus(state, nowMs) {
   let totalRecorded = 0;
   let lastRun      = null;
 
+  // totalRecorded mirrors server.js COUNT(*) over posts: surfaced AND
+  // filtered-out (surfaced=0) records. Filtered-out posts live only in the
+  // per-class post maps, never in seenHashes, so count the union of hashes.
+  const recorded = new Set(Object.keys(seenHashes));
+  for (const classData of Object.values(state.classes)) {
+    for (const hash of Object.keys(classData.posts || {})) recorded.add(hash);
+  }
+  totalRecorded = recorded.size;
+
   for (const entry of Object.values(seenHashes)) {
-    totalRecorded++;
     if (entry.surfaced) {
       totalSeen++;
       if (!lastRun || (entry.seenAt && entry.seenAt > lastRun)) {
