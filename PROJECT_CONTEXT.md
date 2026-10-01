@@ -172,6 +172,14 @@ Selectors from `tools/dom-probe-teams-list.js`: grid `[data-tid="teams-grid-view
 ### Verification status (2026-10-01)
 - **Verified live**: post capture and class detection on `teams.cloud.microsoft` (2 classes, one account); service worker registration after the `_store` fix.
 - **Not verified live**: assignments capture, Sync all classes, "All teams" back navigation, health warnings, other locales/layouts.
+- **Verified against mocks**: server parity (`test/server-parity.test.js`), real unpacked extension end-to-end (`test-dom/extension-e2e.js`).
+
+### Release & packaging (Implemented)
+- `npm run pack:extension` (`scripts/pack-extension.js`): zip of runtime files only, built with Node `zlib` (no deps); fails if a file referenced by the manifest, background `importScripts` or popup is missing. Output `dist/teamspulse-extension-<version>.zip` (`dist/` is git-ignored).
+- `PRIVACY.md` (store privacy policy) and `docs/store-listing.md` (descriptions, permission justifications, data-usage answers, open decisions).
+- GitHub pre-release **v0.6.0** (tag on `1e47659`) with the zip attached: https://github.com/Sa-Alfy/teampulse/releases/tag/v0.6.0
+- To release: bump `extension/manifest.json` `version`, `npm run pack:extension`, tag `vX.Y.Z`, `gh release create vX.Y.Z dist/teamspulse-extension-X.Y.Z.zip --prerelease`.
+- **Open owner decisions**: product name (trademark), store data-usage wording, privacy-policy URL, auto re-injection after updates (needs `scripting` + host permissions).
 
 ---
 
@@ -313,8 +321,10 @@ flowchart TD
 
 ### Step 6: Zero-Install Distribution (🔄 in progress)
 - [x] **Standalone extension** (v0.6.0): reads Teams in-browser, no Node.js / server — see §2.5.
-- [ ] Live verification of assignments + Sync all classes; golden parity test vs `server.js`; extension E2E test.
-- [ ] Chrome Web Store packaging, store listing, `PRIVACY.md` (product name undecided — "Teams" may be a trademark issue).
+- [x] Golden parity test vs `server.js`; extension E2E test (mocks).
+- [x] Packaging, store listing draft, `PRIVACY.md`, GitHub pre-release v0.6.0.
+- [ ] Live verification of assignments + Sync all classes.
+- [ ] Chrome Web Store submission (product name undecided — "Teams" may be a trademark issue).
 - [x] Telegram push (self-host): `notify.js`.
 
 ---
@@ -344,7 +354,9 @@ flowchart TD
 
 ## 7. Test Coverage
 
-### Unit Tests (`npm test` — `node --test`, 84 total: 83 pass, 1 skipped placeholder)
+### Unit Tests (`npm test` — `node --test`, 85 total: 84 pass, 1 skipped placeholder)
+
+- **`test/server-parity.test.js`**: golden test — runs a temp copy of the real `server.js` (only `PORT` rewritten) on a random port with fixture data + a DB written by the copied `db.js`, and deep-compares `/api/digest` and `/api/status` with `buildDigest`/`buildStatus` (ignoring `generatedAt`, `serverTime`, extension-only `scraper*`). Found and fixed: `totalRecorded` must count filtered-out (surfaced=0) records like the server's `COUNT(*)`.
 
 - **`test/digest-utils.test.js`**: `extractDate` (impossible dates, US-format fallback, ambiguous month words, leap years, **every-match scan** — "CT-2 will be held on 5 October 2026", ordinals, month-first, earliest-date-wins), `extractTime`, `classify`, `isNoteworthy`, `filterRecentPosts`, `truncate`, `escapeCell`, `shortClassName`, `sectionLabel`.
 - **`test/hash-post.test.js`**: `db.hashPost` parity, fingerprint tuple collision checks, body capping at 500 chars.
@@ -367,3 +379,7 @@ flowchart TD
 - health (Playwright fake clock): no-class after 10 s, no-messages after 60 s, healthy channel never reports
 - `assignments-frame.js`: 3-tab fixture → one `TP_ASSIGNMENTS`; original tab restored
 - popup: XSS payloads render as literal text (no `<img>`, dialog or request); stale banner; Clear stored data wipes `tp:v1:*`, tab contexts and badge; scraper banner
+
+### Extension E2E (`npm run test:e2e` — `test-dom/extension-e2e.js`, 4 tests, all passing)
+
+Loads the **real unpacked extension** (Playwright persistent context, `channel: "chromium"`, headless) from a temp copy whose manifest gets `127.0.0.1` matches and whose `messages.js` allowlist gets the mock origins (both patches asserted; shipped files untouched). Mock Teams page and assignments iframe are served on different ports (cross-origin). Verifies content scripts → service worker → `chrome.storage.local` (posts + assignments), badge text, popup rendering (posts, tasks, hostile text literal, no `<img>`/dialog, no http(s) requests), and no page errors.

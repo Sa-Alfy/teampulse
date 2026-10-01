@@ -3,15 +3,15 @@
 > **Turn chaotic Microsoft Teams courses into a clean, automated academic briefing.**  
 > Scrapes classes, tracks assignments, extracts Class Test (CT) dates, and delivers a unified daily digest — showing only what's **new since the last run**.
 > 
-> **Status (2026-10-01):** the browser extension now works on its own — no server, no Node.js. Live capture of channel posts has been seen working on `teams.cloud.microsoft` for one student account. Assignment capture and "Sync all classes" have only been tested against local mock pages so far. Not yet on the Chrome Web Store.
+> **Status (2026-10-01, [v0.6.0 pre-release](https://github.com/Sa-Alfy/teampulse/releases/tag/v0.6.0)):** the browser extension works on its own — no server, no Node.js. Live capture of channel posts has been seen working on `teams.cloud.microsoft` for one student account. Assignment capture and "Sync all classes" are **unverified on real Teams** (tested only against local mock pages). Not on the Chrome Web Store.
 
 ---
 
 ## 🧩 Install (no server needed)
 
-1. Download this repo (Code → Download ZIP) and unzip it.
+1. Download `teamspulse-extension-<version>.zip` from [Releases](https://github.com/Sa-Alfy/teampulse/releases) and unzip it.
 2. Open `chrome://extensions` (or `edge://extensions`) and turn on **Developer mode**.
-3. Click **Load unpacked** and choose the `extension/` folder.
+3. Click **Load unpacked** and choose the unzipped folder (or this repo's `extension/` folder).
 4. Open Microsoft Teams in that browser (reload the tab if it was already open) and visit your classes — or click **Sync all classes** in the popup.
 5. Click the ⚡ icon for your briefing. Everything stays in your browser; the extension makes no network requests.
 
@@ -272,13 +272,13 @@ surfaced posts count as seen, so loosening the classifier later can still recove
 - [x] Content scripts + validated message router; class detected from the page title + channel heading
 - [x] Popup and badge read `chrome.storage.local`; no localhost, no host permissions, strict CSP
 - [x] Scraper-health warning, Clear stored data, Sync all classes
-- [x] Tests: 83 unit (`npm test`) + 16 Playwright DOM tests (`npm run test:dom`)
+- [x] Tests: 84 unit (`npm test`, incl. a golden parity test that runs the real `server.js`), 16 Playwright DOM tests (`npm run test:dom`), 4 end-to-end tests with the real unpacked extension loaded (`npm run test:e2e`) — all against mocks, not live Teams
 - [ ] Verify on live Teams: assignments capture, Sync all classes, "All teams" back navigation
-- [ ] Golden test: extension output vs `server.js` for the same data
-- [ ] Extension end-to-end test with the unpacked extension loaded
 
 ### 🔲 Phase 5: Distribution
-- [ ] **Chrome Web Store**: packaged zip, store listing, `PRIVACY.md` (product name still to be decided — "Teams" in the name may be rejected).
+- [x] `npm run pack:extension` → store-ready zip; [`PRIVACY.md`](PRIVACY.md); [store listing draft](docs/store-listing.md)
+- [x] GitHub pre-release [v0.6.0](https://github.com/Sa-Alfy/teampulse/releases/tag/v0.6.0) with the zip attached
+- [ ] **Chrome Web Store** submission — product name undecided ("Teams" in the name may be rejected)
 - [ ] **1-Click Portable Runner**: Double-click `.bat` with embedded portable Node.
 
 ---
