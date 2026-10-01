@@ -27,6 +27,7 @@ const CHROME_STUB_TEAMS = `
 (function() {
   window.__msgs = [];
   window.__storageListeners = [];
+  window.__local = {};
   window.__reply = function() { return { ok: true }; };   // tests may override
   window.chrome = {
     runtime: {
@@ -38,7 +39,10 @@ const CHROME_STUB_TEAMS = `
         if (cb) setTimeout(function() { cb(res); }, 0);
       }
     },
-    storage: { onChanged: { addListener: function(fn) { window.__storageListeners.push(fn); } } }
+    storage: {
+      onChanged: { addListener: function(fn) { window.__storageListeners.push(fn); } },
+      local: { set: function(obj, cb) { Object.assign(window.__local, JSON.parse(JSON.stringify(obj))); if (cb) cb(); } }
+    }
   };
 })();
 `;
@@ -306,6 +310,43 @@ async function main() {
     await page.waitForTimeout(2500);
     assert.strictEqual(await count("TP_POSTS"), 1, "orphaned script kept sending");
     assert.deepStrictEqual(errors, [], `page errors: ${errors.join("; ")}`);
+    await ctx.close();
+  });
+
+  await runTest("Sync all classes: visits every class (not hidden ones), one TP_POSTS each, returns to grid", async () => {
+    const ctx  = await browser.newContext();
+    const page = await ctx.newPage();
+    await page.addInitScript({ content: CHROME_STUB_TEAMS });
+    await page.goto(
+      "file:///" + path.join(FIXTURE_DIR, "teams-grid.html").replace(/\\/g, "/")
+    );
+    await page.addScriptTag({ path: path.join(SCRIPT_DIR, "teams-top.js") });
+    await page.evaluate(() => window.__storageListeners.forEach((fn) =>
+      fn({ "tp:sync:cmd": { newValue: { id: "1" } } }, "local")));
+
+    const deadline = Date.now() + 40000;
+    let status = null;
+    while (Date.now() < deadline) {
+      status = await page.evaluate(() => window.__local["tp:sync:status"] || null);
+      if (status && status.state !== "running") break;
+      await page.waitForTimeout(250);
+    }
+    assert.ok(status, "no sync status written");
+    assert.strictEqual(status.state, "done", `sync ended as ${JSON.stringify(status)}`);
+    assert.strictEqual(status.total, 3);
+    assert.strictEqual(status.done, 3);
+    assert.strictEqual(status.failed, 0);
+
+    const visited = await page.evaluate(() => window.__visited);
+    assert.ok(!visited.includes("Old_2025_CSE 101"), "hidden team was visited");
+
+    const posts = (await page.evaluate(() => window.__msgs)).filter((m) => m.type === "TP_POSTS");
+    for (const name of ["Summer_2026_CSE 303 (V1)_242_D4", "Summer_2026_CSE 311 (V1)_ 232_D2", "MAT 103 D1; Summer 2026"]) {
+      const p = posts.find((m) => m.className === name);
+      assert.ok(p, `no TP_POSTS for ${name}`);
+      assert.ok(p.posts.every((x) => x.body.includes(name)), `posts filed under the wrong class for ${name}`);
+    }
+    assert.ok(await page.locator('[data-tid="teams-grid-view"]').count(), "did not return to the grid it started on");
     await ctx.close();
   });
 

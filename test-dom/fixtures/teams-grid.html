@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Teams and Channels | Microsoft Teams</title>
+</head>
+<body>
+  <!--
+    SPA mock of the Teams classes grid ↔ channel view, shaped from
+    tools/dom-probe-teams-list.js + tools/dom-probe.js output (2026-10-01).
+    DISCLAIMER: proves sync logic only, not compatibility with the real Teams DOM.
+  -->
+  <div id="app"></div>
+  <script>
+    const CLASSES = ["Summer_2026_CSE 303 (V1)_242_D4", "Summer_2026_CSE 311 (V1)_ 232_D2", "MAT 103 D1; Summer 2026"];
+    const HIDDEN  = ["Old_2025_CSE 101"];
+    window.__visited = [];
+    const app = document.getElementById("app");
+    const el = (tag, attrs, text) => {
+      const e = document.createElement(tag);
+      for (const [k, v] of Object.entries(attrs || {})) e.setAttribute(k, v);
+      if (text) e.textContent = text;
+      return e;
+    };
+    function card(name) {
+      const c = el("div", { role: "group", "data-tid": "19:x@thread.tacv2-team-card", tabindex: "0" });
+      const b = el("button", { "data-testid": "team-name", "aria-label": name }, name);
+      b.addEventListener("click", () => setTimeout(() => showChannel(name), 300));
+      c.appendChild(el("div")).appendChild(b);
+      return c;
+    }
+    function showGrid() {
+      document.title = "Teams | Microsoft Teams";
+      app.replaceChildren();
+      const grid = el("div", { "data-tid": "teams-grid-view" });
+      grid.appendChild(el("div", { "data-tid": "ClassTeamsSection-header" }, `Classes${CLASSES.length} teams`));
+      const panel = el("div", { "data-tid": "ClassTeamsSection-panel" });
+      CLASSES.forEach((n) => panel.appendChild(card(n)));
+      grid.appendChild(panel);
+      grid.appendChild(el("div", { "data-tid": "HiddenTeamsSection-header" }, "Hidden1 teams"));
+      const hidden = el("div");
+      HIDDEN.forEach((n) => hidden.appendChild(card(n)));
+      grid.appendChild(hidden);
+      app.appendChild(grid);
+    }
+    function showChannel(name) {
+      window.__visited.push(name);
+      document.title = `Teams and Channels | ${name} | General | Microsoft Teams`;
+      app.replaceChildren();
+      const back = el("button", {}, "All teams");
+      back.addEventListener("click", () => setTimeout(showGrid, 300));
+      app.appendChild(back);
+      app.appendChild(el("div", { "data-tid": "entity-header" })).appendChild(el("h2", { "data-tid": "channelTitle-text" }, "General"));
+      const msg = el("div", { "data-tid": "channel-pane-message" });
+      const sub = el("div", { "data-tid": "post-message-subheader" }, "Dr. Test ");
+      sub.appendChild(el("span", { "data-tid": "timestamp", title: "Monday, September 28, 2026 9:00 AM" }, "9/28 9:00 AM"));
+      msg.appendChild(sub);
+      msg.appendChild(el("div", { "data-tid": "subject-line" }, "Exam notice"));
+      msg.appendChild(el("div", { "data-tid": "message-body" }, `Exam for ${name} on 5 October 2026`));
+      app.appendChild(msg);
+    }
+    showGrid();
+  </script>
+</body>
+</html>

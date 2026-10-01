@@ -352,12 +352,119 @@
 
   _healthTimer = setInterval(checkHealth, HEALTH_TICK_MS);
 
-  // ── Resend after "Clear stored data" ───────────────────────────────────────
+  // ── Sync all classes (user-triggered from the popup) ─────────────────────
+  // Selectors confirmed by tools/dom-probe-teams-list.js on teams.cloud.microsoft
+  // (2026-10-01), except ALL_TEAMS_TEXT (seen on screen, same text the
+  // Playwright scraper clicks) — the Teams app-bar button is the fallback.
+  // Clicks only Teams' own navigation; reads the same rendered posts as above.
+
+  const GRID_SELECTOR       = '[data-tid="teams-grid-view"]';
+  const CLASS_PANEL_SEL     = '[data-tid="ClassTeamsSection-panel"]';
+  const TEAM_NAME_BTN_SEL   = 'button[data-testid="team-name"]';
+  const TEAMS_APP_BTN_SEL   = 'button[data-tid="2a84919f-59d8-4441-a975-2a8c2643b741"]';
+  const ALL_TEAMS_TEXT      = /^all teams$/i;
+  const SYNC_CMD_KEY        = "tp:sync:cmd";
+  const SYNC_STATUS_KEY     = "tp:sync:status";
+  const NAV_TIMEOUT_MS      = 20_000;
+  const SETTLE_MS           = 2_500;
+
+  let _syncing = false;
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  async function waitFor(pred, timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (_dead) return false;
+      if (pred()) return true;
+      await sleep(250);
+    }
+    return false;
+  }
+
+  function classButtons() {
+    const panel = document.querySelector(CLASS_PANEL_SEL);
+    return panel ? Array.from(panel.querySelectorAll(TEAM_NAME_BTN_SEL)) : [];
+  }
+
+  async function goToGrid() {
+    if (document.querySelector(GRID_SELECTOR)) return true;
+    const back = Array.from(document.querySelectorAll("button, a, [role='button'], [role='link']"))
+      .find((el) => ALL_TEAMS_TEXT.test(normWs(el.textContent || "")));
+    if (back) {
+      back.click();
+      if (await waitFor(() => document.querySelector(GRID_SELECTOR), 8000)) return true;
+    }
+    const appBtn = document.querySelector(TEAMS_APP_BTN_SEL);
+    if (appBtn) appBtn.click();
+    return waitFor(() => document.querySelector(GRID_SELECTOR), NAV_TIMEOUT_MS);
+  }
+
+  function writeSyncStatus(status) {
+    try {
+      chrome.storage.local.set({ [SYNC_STATUS_KEY]: { ...status, at: new Date().toISOString() } });
+    } catch (_) { /* context gone */ }
+  }
+
+  async function syncAllClasses() {
+    if (_syncing || _dead) return;
+    _syncing = true;
+    const startClass = getCurrentClassName();
+    let done = 0, failed = 0, total = 0;
+    writeSyncStatus({ state: "running", done, failed, total });
+    try {
+      if (!(await goToGrid())) {
+        writeSyncStatus({ state: "error", reason: "classes-page-not-found" });
+        return;
+      }
+      const names = classButtons().map((b) => normWs(b.textContent || "")).filter(Boolean);
+      total = names.length;
+      if (total === 0) {
+        writeSyncStatus({ state: "error", reason: "no-classes-found" });
+        return;
+      }
+
+      for (const name of names) {
+        writeSyncStatus({ state: "running", done, failed, total });
+        if (!(await goToGrid())) { failed++; continue; }
+        const btn = classButtons().find((b) => normWs(b.textContent || "") === name);
+        if (!btn) { failed++; continue; }
+        btn.click();
+        const opened = await waitFor(
+          () => getCurrentClassName() === name && document.querySelectorAll(MESSAGE_SELECTOR).length > 0,
+          NAV_TIMEOUT_MS
+        );
+        if (!opened) { failed++; continue; }
+        await sleep(SETTLE_MS); // let the rest of the visible posts render
+        tryFlushPosts();
+        done++;
+      }
+
+      // Return the user to where they started: their class, or the grid.
+      if (await goToGrid()) {
+        const btn = startClass && classButtons().find((b) => normWs(b.textContent || "") === startClass);
+        if (btn) btn.click();
+      }
+      writeSyncStatus({ state: "done", done, failed, total });
+    } catch (_) {
+      writeSyncStatus({ state: "error", reason: "unexpected", done, failed, total });
+    } finally {
+      _syncing = false;
+    }
+  }
+
+  // ── Storage listener: Clear-data resend + sync command ─────────────────────
   // The store never deletes tp:v1:* keys except on clearAll, so a removal means
   // the user wiped data: forget what was sent so the open channel is re-captured.
   try {
     chrome.storage.onChanged.addListener((changes, area) => {
       if (_dead || area !== "local") return;
+      // Only the tab the user is looking at runs a sync (several Teams tabs
+      // may be open; each gets this event).
+      const cmd = changes[SYNC_CMD_KEY];
+      if (cmd && cmd.newValue && document.visibilityState === "visible") {
+        syncAllClasses();
+      }
       const wiped = Object.entries(changes).some(
         ([k, c]) => k.startsWith("tp:v1:") && c.newValue === undefined
       );

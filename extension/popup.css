@@ -803,3 +803,15 @@ body::-webkit-scrollbar-thumb:hover {
 .link-btn.confirming {
   color: #f87171;
 }
+
+.sync-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 12px 0;
+  font-size: 11px;
+}
+
+.sync-status {
+  color: var(--text-dim);
+}

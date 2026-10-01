@@ -19,6 +19,16 @@ const filterToggleBtn  = document.getElementById("filterToggleBtn");
 const clearDataBtn     = document.getElementById("clearDataBtn");
 const staleBanner      = document.getElementById("staleBanner");
 const scraperBanner    = document.getElementById("scraperBanner");
+const syncAllBtn       = document.getElementById("syncAllBtn");
+const syncStatus       = document.getElementById("syncStatus");
+
+const SYNC_CMD_KEY    = "tp:sync:cmd";
+const SYNC_STATUS_KEY = "tp:sync:status";
+const SYNC_REASONS = {
+  "classes-page-not-found": "Couldn't open the Teams classes page.",
+  "no-classes-found":       "No classes found on the Teams page.",
+  "unexpected":             "Sync stopped unexpectedly.",
+};
 const controlsBar      = document.getElementById("controlsBar");
 const classFilter      = document.getElementById("classFilter");
 const timeFilter       = document.getElementById("timeFilter");
@@ -646,8 +656,42 @@ clearDataBtn.addEventListener("click", async () => {
 // Lifecycle & live updates
 // ---------------------------------------------------------------------------
 
+// ── Sync all classes ────────────────────────────────────────────────────────
+// The popup can't message a tab without the "tabs" permission, so it writes a
+// command to storage; the content script in the visible Teams tab runs it and
+// reports progress back under SYNC_STATUS_KEY.
+
+let syncWatchdog = null;
+
+function renderSyncStatus(s) {
+  // A "running" status that stopped updating means the tab was closed mid-sync.
+  const abandoned = s && s.state === "running" && Date.now() - Date.parse(s.at) > 120000;
+  if (!s || abandoned) { syncStatus.textContent = ""; syncAllBtn.disabled = false; return; }
+  if (syncWatchdog) { clearTimeout(syncWatchdog); syncWatchdog = null; }
+  if (s.state === "running") {
+    syncStatus.textContent = s.total ? `Syncing ${s.done + s.failed + 1} of ${s.total}…` : "Syncing…";
+  }
+  else if (s.state === "done") syncStatus.textContent = `Synced ${s.done} of ${s.total} classes` + (s.failed ? ` (${s.failed} failed)` : "");
+  else if (s.state === "error") syncStatus.textContent = SYNC_REASONS[s.reason] || "Sync failed.";
+  syncAllBtn.disabled = s.state === "running";
+}
+
+syncAllBtn.addEventListener("click", async () => {
+  syncStatus.textContent = "Starting… keep the Teams tab open.";
+  await chrome.storage.local.set({ [SYNC_CMD_KEY]: { id: `${Date.now()}-${Math.random()}` } });
+  // Nobody picked it up → no visible Teams tab with a live content script.
+  if (syncWatchdog) clearTimeout(syncWatchdog);
+  syncWatchdog = setTimeout(() => {
+    syncWatchdog = null;
+    syncStatus.textContent = "No Teams tab responded. Switch to your Teams tab (reload it once), then try again.";
+  }, 5000);
+});
+
+chrome.storage.local.get([SYNC_STATUS_KEY], (res) => renderSyncStatus(res && res[SYNC_STATUS_KEY]));
+
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "local") return;
+  if (changes[SYNC_STATUS_KEY]) renderSyncStatus(changes[SYNC_STATUS_KEY].newValue);
   if (Object.keys(changes).some((k) => k.startsWith(TP.KEY_PREFIX))) scheduleReload();
 });
 
