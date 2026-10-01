@@ -2,7 +2,7 @@
 
 _Last updated: 2026-10-01 · applies to extension version 0.6.0_
 
-**What it reads.** While you have Microsoft Teams open (`teams.microsoft.com`, `teams.cloud.microsoft`) and its assignments frame (`assignments.edu.cloud.microsoft`), the extension reads what those pages show: class names, channel posts (author name, subject, text, timestamp, attachment names) and assignment titles, due dates and status. It reads nothing on any other website. "Sync all classes" only opens your own classes in your own Teams tab when you click it.
+**What it reads.** While you have Microsoft Teams open (`teams.microsoft.com`, `teams.cloud.microsoft`) and its assignments frame (`assignments.edu.cloud.microsoft`), the extension reads what those pages show: class names, channel posts (author name, subject, text, timestamp, attachment names) and assignment titles, due dates and status. It reads nothing on any other website. "Sync all classes" opens your own classes and the Teams Assignments app in your own Teams tab — when you click it, and (unless you untick **Auto-sync** in the popup) once automatically when Teams opens, at most every 6 hours.
 
 **Where it is stored.** Only in your browser's extension storage (`chrome.storage.local`) on your device. A temporary per-tab note of the open class is kept in session storage and is discarded when the tab closes.
 

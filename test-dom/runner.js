@@ -534,7 +534,7 @@ async function main() {
     await page.goto("https://assignments.test/?isTeamsFrame=true");
     await page.addScriptTag({ path: path.join(SCRIPT_DIR, "assignments-frame.js") });
 
-    const m = (await waitAssignMsgs(page, 1, 60000)).find((x) => x.type === "TP_ASSIGNMENTS");
+    const m = (await waitAssignMsgs(page, 1, 90000)).find((x) => x.type === "TP_ASSIGNMENTS");
     assert.ok(m, "no TP_ASSIGNMENTS");
     assert.strictEqual(m.scope, "all-classes");
     const past = await page.evaluate(() => window.__PAST);
@@ -549,6 +549,28 @@ async function main() {
     await page.waitForTimeout(800); // restore click + the fixture's swap delay
     assert.strictEqual(await page.evaluate(() => document.querySelector('[data-test="Past due"]').getAttribute("aria-selected")),
       "true", "original tab restored");
+    await ctx.close();
+  });
+
+  // Live 2026-10-01: app opens on empty Upcoming; Past due loads slowly →
+  // the old 4 s wait read an empty screen ("+ assignments", 0 tasks).
+  await runTest("Assignments app opens on empty Upcoming, Past due loads in 6 s → all cards captured", async () => {
+    const ctx  = await browser.newContext({ timezoneId: "UTC" });
+    const page = await ctx.newPage();
+    await page.clock.setFixedTime(new Date("2026-10-01T10:00:00Z"));
+    await page.route("https://assignments.test/**", (route) => route.fulfill({
+      contentType: "text/html",
+      body: require("fs").readFileSync(path.join(FIXTURE_DIR, "assignments-virtual.html"), "utf8"),
+    }));
+    await page.addInitScript({ content: CHROME_STUB_ASSIGNMENTS });
+    await page.goto("https://assignments.test/?start=Upcoming&delay=6000");
+    await page.addScriptTag({ path: path.join(SCRIPT_DIR, "assignments-frame.js") });
+
+    const m = (await waitAssignMsgs(page, 1, 90000)).find((x) => x.type === "TP_ASSIGNMENTS");
+    assert.ok(m, "no TP_ASSIGNMENTS");
+    const past = await page.evaluate(() => window.__PAST);
+    assert.strictEqual(m.assignments.length, past.length, `captured ${m.assignments.length} of ${past.length}`);
+    assert.ok(m.assignments.every((a) => a.tab === "Past due"), "all Past due");
     await ctx.close();
   });
 

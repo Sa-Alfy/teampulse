@@ -129,7 +129,11 @@ function extractGuid(rawId) {
  * @param {string} tabName
  * @returns {object[]}
  */
-const EMPTY_TAB_WAIT_MS = 4_000;
+const LIST_LOAD_TIMEOUT_MS = 20_000;
+
+function listLoaded() {
+  return visibleCards().length > 0 || /\bno assignments\b/i.test(document.body.innerText || "");
+}
 const SCROLL_SETTLE_MS  = 400;
 const MAX_SCROLL_STEPS  = 120;
 
@@ -389,15 +393,17 @@ async function scrape() {
     //    An assignment is only ever in one tab, so an unchanged non-empty set
     //    means stale content: skip the tab rather than mislabel it.
     await waitFor(panelSettled, WAIT_TIMEOUT_MS);
-    if (!wasSelected) {
-      // Empty → empty is a genuinely empty tab, so that wait is kept short.
-      const changed = await waitFor(() => !sameIds(visibleCardIds(), before),
-        before.size > 0 ? WAIT_TIMEOUT_MS : EMPTY_TAB_WAIT_MS);
-      if (!changed && before.size > 0) {
+    if (!wasSelected && before.size > 0) {
+      const changed = await waitFor(() => !sameIds(visibleCardIds(), before), WAIT_TIMEOUT_MS);
+      if (!changed) {
         console.warn(`[TeamsPulse] "${tabName}" still showed the previous tab's cards; skipped`);
         continue;
       }
     }
+    // The list is fetched over the network after a switch (live: reading after
+    // 4 s found an empty screen and stored nothing). Wait for cards or the
+    // empty-state text before reading.
+    await waitFor(listLoaded, LIST_LOAD_TIMEOUT_MS);
 
     // Brief extra settle to let React flush.
     await new Promise((r) => setTimeout(r, SETTLE_MS));

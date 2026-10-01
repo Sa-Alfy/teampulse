@@ -104,6 +104,9 @@ async function main() {
     const extId = new URL(sw.url()).host;
     console.log(`\nextension (unpacked, id ${extId}):`);
 
+    // Auto-sync would start clicking the mock page 20 s after load.
+    await sw.evaluate(() => chrome.storage.local.set({ "tp:settings:autoSync": false }));
+
     const errors = [];
     const teams = await context.newPage();
     teams.on("pageerror", (e) => errors.push(e.message));

@@ -373,7 +373,7 @@
   // way — NOT yet seen in a probe; English UI only.
   const APPS_NAV_SEL         = '[role="navigation"][aria-label="Apps"]';
   const ASSIGNMENTS_LABEL    = /^assignments\b/i;
-  const ASSIGNMENTS_WAIT_MS  = 60_000;
+  const ASSIGNMENTS_WAIT_MS  = 120_000; // 3 tabs × up to 20 s load + scrolling
   const ASSIGNMENT_KEY_PFX   = "tp:v1:assignments:";
 
   let _syncing = false;
@@ -489,6 +489,39 @@
     }
   }
 
+  // ── Auto-sync when Teams opens (owner's choice, 2026-10-01) ────────────────
+  // Runs Sync all classes once, 20 s after Teams loads, at most every 6 h,
+  // only in the visible tab and never while another sync is running.
+  // Popup checkbox stores tp:settings:autoSync (default on).
+
+  const AUTO_SYNC_KEY      = "tp:settings:autoSync";
+  const LAST_AUTO_SYNC_KEY = "tp:sync:lastAuto";
+  const AUTO_SYNC_DELAY_MS = 20_000;
+  const AUTO_SYNC_EVERY_MS = 6 * 3600e3;
+
+  let _autoTried = false;
+
+  async function maybeAutoSync() {
+    if (_autoTried || _dead || _syncing || document.visibilityState !== "visible") return;
+    _autoTried = true;
+    try {
+      const s = await chrome.storage.local.get([AUTO_SYNC_KEY, LAST_AUTO_SYNC_KEY, SYNC_STATUS_KEY]);
+      if (s[AUTO_SYNC_KEY] === false) return;
+      if (Date.now() - (Date.parse(s[LAST_AUTO_SYNC_KEY] || "") || 0) < AUTO_SYNC_EVERY_MS) return;
+      const st = s[SYNC_STATUS_KEY];
+      if (st && st.state === "running" && Date.now() - Date.parse(st.at) < 120_000) return; // another tab
+      await chrome.storage.local.set({ [LAST_AUTO_SYNC_KEY]: new Date().toISOString() });
+      syncAllClasses();
+    } catch (_) { /* extension context gone */ }
+  }
+
+  setTimeout(() => {
+    if (document.visibilityState === "visible") maybeAutoSync();
+    else document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") setTimeout(maybeAutoSync, AUTO_SYNC_DELAY_MS);
+    }, { once: true });
+  }, AUTO_SYNC_DELAY_MS);
+
   // ── Storage listener: Clear-data resend + sync command ─────────────────────
   // The store never deletes tp:v1:* keys except on clearAll, so a removal means
   // the user wiped data: forget what was sent so the open channel is re-captured.
@@ -501,9 +534,12 @@
       if (cmd && cmd.newValue && document.visibilityState === "visible") {
         syncAllClasses();
       }
-      // The assignments frame stored a capture → release a waiting sync.
+      // The assignments frame stored a non-empty capture → release a waiting
+      // sync. (An empty write is not proof of a capture — live: "+ assignments"
+      // with 0 tasks.)
       if (_assignmentWaiters.length &&
-          Object.keys(changes).some((k) => k.startsWith(ASSIGNMENT_KEY_PFX) && changes[k].newValue !== undefined)) {
+          Object.keys(changes).some((k) => k.startsWith(ASSIGNMENT_KEY_PFX) &&
+            Array.isArray(changes[k].newValue) && changes[k].newValue.length > 0)) {
         const waiters = _assignmentWaiters;
         _assignmentWaiters = [];
         waiters.forEach((r) => r(true));

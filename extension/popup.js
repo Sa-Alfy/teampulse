@@ -675,7 +675,8 @@ function renderSyncStatus(s) {
   else if (s.state === "done") {
     syncStatus.textContent = `Synced ${s.done} of ${s.total} classes` + (s.failed ? ` (${s.failed} failed)` : "") +
       (s.assignments === "ok" ? " + assignments."
-        : s.assignments ? " — assignments not captured; open the Assignments app once." : ".");
+        : s.assignments === "no-button" ? " — Assignments app button not found."
+        : s.assignments ? " — no assignments captured (none found, or the list didn't load)." : ".");
   }
   else if (s.state === "error") syncStatus.textContent = SYNC_REASONS[s.reason] || "Sync failed.";
   syncAllBtn.disabled = s.state === "running";
@@ -693,6 +694,16 @@ syncAllBtn.addEventListener("click", async () => {
 });
 
 chrome.storage.local.get([SYNC_STATUS_KEY], (res) => renderSyncStatus(res && res[SYNC_STATUS_KEY]));
+
+// Auto-sync when Teams opens (read by teams-top.js; default on).
+const AUTO_SYNC_KEY = "tp:settings:autoSync";
+const autoSyncToggle = document.getElementById("autoSyncToggle");
+chrome.storage.local.get([AUTO_SYNC_KEY], (res) => {
+  autoSyncToggle.checked = !(res && res[AUTO_SYNC_KEY] === false);
+});
+autoSyncToggle.addEventListener("change", () => {
+  chrome.storage.local.set({ [AUTO_SYNC_KEY]: autoSyncToggle.checked });
+});
 
 // ── Export assignments (.ics) — generated on-device, saved via a blob: link ──
 document.getElementById("exportIcsBtn").addEventListener("click", () => {

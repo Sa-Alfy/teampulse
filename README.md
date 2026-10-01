@@ -80,7 +80,7 @@ Both paths share the same parsing rules (`extension/core/digest-utils.js`) and p
 - [x] **Storage & Deduplication**: SQLite (`teamspulse.db`) stores a SHA-256 fingerprint for every processed post. On the next run, already-seen posts are silently skipped â€” only genuinely new content appears in the digest.
 - [x] **Resilient UI Selectors**: Bypasses unstable Fluent UI atomic class names by anchoring to semantic `data-testid` / `data-test` / ARIA attributes.
 - [x] **Standalone Chrome / Edge extension**: popup reads `chrome.storage.local` â€” no server or Node.js. Live-updates as you browse Teams; toolbar badge counts new posts (24 h window).
-- [x] **Sync all classes**: one click opens each class in your Teams tab, captures it, and returns you where you were (hidden teams skipped). Confirmed on live Teams by the owner (2026-10-01).
+- [x] **Sync all classes**: opens each class in your Teams tab, then the Assignments app (all classes' assignments, scrolled through), captures it all, and returns you where you were (hidden teams skipped). Runs on click, and automatically once when Teams opens (at most every 6 h; untick **Auto-sync** in the popup to stop it). Confirmed on live Teams by the owner (2026-10-01).
 - [x] **Scraper health**: if Teams changes its page and capture stops working, the popup says "Scraper may be out of date" instead of quietly showing old data.
 - [x] **Clear stored data**: one button wipes everything the extension stored.
 - [x] **Export assignments (.ics)**: download a calendar file of dated assignments, generated on your device (`extension/core/ics.js`); import it into Google Calendar, Outlook or Apple Calendar. Re-importing updates events instead of duplicating them.

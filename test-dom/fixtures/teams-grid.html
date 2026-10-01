@@ -72,7 +72,7 @@
       document.title = "Assignments | Microsoft Teams";
       app.replaceChildren(el("div", {}, "Assignments app"));
       setTimeout(() => (window.__storageListeners || []).forEach((fn) =>
-        fn({ "tp:v1:assignments:MAT 103 D1; Summer 2026": { newValue: [] } }, "local")), 1000);
+        fn({ "tp:v1:assignments:MAT 103 D1; Summer 2026": { newValue: [{ tab: "Past due", title: "x" }] } }, "local")), 1000);
     });
     showGrid();
   </script>

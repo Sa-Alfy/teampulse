@@ -39,7 +39,13 @@
   });
   window.__PAST = PAST;
   const ROW = 120;
-  let current = "Past due";
+  // ?start=Upcoming&delay=6000 → opens on (empty) Upcoming and the list takes
+  // 6 s to load after a tab switch (network), like the live app.
+  const q = new URLSearchParams(location.search);
+  let current = q.get("start") || "Past due";
+  const SWAP_MS = parseInt(q.get("delay") || "600", 10);
+  document.querySelectorAll("[role='tab']").forEach((t) =>
+    t.setAttribute("aria-selected", t.getAttribute("data-test") === current ? "true" : "false"));
   const scroller = document.getElementById("scroller");
   const spacer = document.getElementById("spacer");
   const el = (tag, attrs, text) => {
@@ -71,7 +77,9 @@
   scroller.addEventListener("scroll", render);
   document.querySelectorAll("[role='tab']").forEach((tab) => tab.addEventListener("click", () => {
     document.querySelectorAll("[role='tab']").forEach((t) => t.setAttribute("aria-selected", t === tab ? "true" : "false"));
-    setTimeout(() => { current = tab.getAttribute("data-test"); scroller.scrollTop = 0; render(); }, 600);
+    const next = tab.getAttribute("data-test");
+    current = "loading"; render(); // list cleared while fetching
+    setTimeout(() => { current = next; scroller.scrollTop = 0; render(); }, SWAP_MS);
   }));
   render();
   scroller.scrollTop = 600; render(); // user was scrolled down a bit
