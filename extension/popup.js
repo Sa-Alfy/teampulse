@@ -18,6 +18,7 @@ const refreshBtn       = document.getElementById("refreshBtn");
 const filterToggleBtn  = document.getElementById("filterToggleBtn");
 const clearDataBtn     = document.getElementById("clearDataBtn");
 const staleBanner      = document.getElementById("staleBanner");
+const scraperBanner    = document.getElementById("scraperBanner");
 const controlsBar      = document.getElementById("controlsBar");
 const classFilter      = document.getElementById("classFilter");
 const timeFilter       = document.getElementById("timeFilter");
@@ -211,8 +212,12 @@ function updateHeaderMeta() {
     lastScrapeText.textContent = "Nothing captured yet";
   }
 
+  // A suspect scraper explains stale data better than "open Teams" does, so it
+  // replaces the stale banner rather than stacking with it.
+  const suspect = rawStatusData.scraper === "suspect";
   setHealthPill(rawStatusData.health);
-  staleBanner.classList.toggle("hidden", noData || rawStatusData.health !== "stale");
+  scraperBanner.classList.toggle("hidden", !suspect);
+  staleBanner.classList.toggle("hidden", suspect || noData || rawStatusData.health !== "stale");
 
   const totalSeen = rawStatusData.totalSeen || 0;
   const newCount = rawDigestData ? (rawDigestData.newPostCount || 0) : 0;

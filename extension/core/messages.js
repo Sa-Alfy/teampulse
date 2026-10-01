@@ -31,6 +31,8 @@ const TEAMS_ORIGINS = new Set([
 
 const ASSIGNMENTS_ORIGIN = "https://assignments.edu.cloud.microsoft";
 
+const HEALTH_STATUSES = new Set(["no-class", "no-messages"]);
+
 // ── Validation limits (from spec) ──────────────────────────────────────────
 
 const MAX_CLASS_NAME   = 200;
@@ -191,6 +193,34 @@ async function handleMessage(msg, sender, deps) {
 
     const now = nowIso();
     await store.ingestAssignments(className, assignments, now);
+    return ok();
+  }
+
+  // ── TP_HEALTH ─────────────────────────────────────────────────────────────
+  // Content script reports a sustained scraper problem. Only problem states
+  // are accepted; success is implied by a newer TP_POSTS ingest.
+  if (msg.type === "TP_HEALTH") {
+    if (!TEAMS_ORIGINS.has(senderOrigin)) {
+      return reject(`TP_HEALTH from disallowed origin: ${senderOrigin}`);
+    }
+    const { status, className } = msg;
+    if (!HEALTH_STATUSES.has(status)) {
+      return reject("status must be one of: " + [...HEALTH_STATUSES].join(", "));
+    }
+    if (status === "no-class") {
+      if (className !== undefined && className !== null) {
+        return reject("no-class must not carry a className");
+      }
+      await store.recordHealth(null, status, nowIso());
+      return ok();
+    }
+    if (typeof className !== "string" || className.length === 0) {
+      return reject("className must be a non-empty string");
+    }
+    if (className.length > MAX_CLASS_NAME) {
+      return reject(`className exceeds ${MAX_CLASS_NAME} chars`);
+    }
+    await store.recordHealth(className, status, nowIso());
     return ok();
   }
 

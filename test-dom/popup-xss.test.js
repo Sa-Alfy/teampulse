@@ -152,7 +152,21 @@ async function run(browser, runTest) {
   });
 }
 
-module.exports = { run };
+async function runHealth(browser, runTest) {
+  await runTest("scraper problem newer than last capture → 'Scraper may be out of date' banner", async () => {
+    const now  = new Date().toISOString();
+    const old  = new Date(Date.now() - 48 * 3600e3).toISOString();
+    const seed = seedState(now, old);
+    seed["tp:v1:scrape-health"] = { global: { status: "no-class", at: now }, classes: {} };
+    const { ctx, page } = await openPopup(browser, seed);
+    await page.waitForSelector("#scraperBanner:not(.hidden)", { timeout: 5000 });
+    assert.match(await page.locator("#scraperBanner").textContent(), /Scraper may be out of date/);
+    assert.strictEqual(await page.locator("#staleBanner").isHidden(), true, "stale banner should yield to scraper banner");
+    await ctx.close();
+  });
+}
+
+module.exports = { run: async (browser, runTest) => { await run(browser, runTest); await runHealth(browser, runTest); } };
 
 if (process.env.NODE_TEST_CONTEXT) {
   require("node:test").test("popup DOM tests (run with npm run test:dom)", { skip: true }, () => {});

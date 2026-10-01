@@ -29,6 +29,7 @@ const KEY_CLASS_INDEX     = `${KEY_PREFIX}class-index`;
 const KEY_POSTS_PFX       = `${KEY_PREFIX}posts:`;
 const KEY_ASSIGN_PFX      = `${KEY_PREFIX}assignments:`;
 const KEY_SYNC_PFX        = `${KEY_PREFIX}last-sync:`;
+const KEY_HEALTH          = `${KEY_PREFIX}scrape-health`;
 
 // ---------------------------------------------------------------------------
 // Backends
@@ -259,6 +260,29 @@ function createStore(backend) {
   }
 
   /**
+   * Record a scraper problem reported by a content script.
+   * className === null → page-level problem (class could not be resolved).
+   * Success is not recorded here: a later last-sync timestamp supersedes it.
+   *
+   * Shape: { global: {status, at} | null, classes: { [className]: {status, at} } }
+   *
+   * @param {string|null} className
+   * @param {string}      status   — "no-class" | "no-messages"
+   * @param {string}      nowIso
+   */
+  async function recordHealth(className, status, nowIso) {
+    return enqueue(async () => {
+      const data   = await backend.get([KEY_HEALTH]);
+      const health = data[KEY_HEALTH] || { global: null, classes: {} };
+      if (!health.classes) health.classes = {};
+      const entry = { status, at: nowIso };
+      if (className === null) health.global = entry;
+      else health.classes[className] = entry;
+      await backend.set({ [KEY_HEALTH]: health });
+    });
+  }
+
+  /**
    * Return the full store state: all classes, seen-hash map, last-sync times.
    * Reads the class index and returns { seenHashes, classes: { [className]: { posts, assignments, lastSync } } }.
    * @returns {Promise<object>}
@@ -276,7 +300,7 @@ function createStore(backend) {
    * @returns {Promise<object>}
    */
   async function getFullState(classNames) {
-    const allKeys = [KEY_SEEN_HASHES];
+    const allKeys = [KEY_SEEN_HASHES, KEY_HEALTH];
     for (const cn of classNames) {
       allKeys.push(postsKey(cn), assignKey(cn), syncKey(cn));
     }
@@ -293,7 +317,8 @@ function createStore(backend) {
       };
     }
 
-    return { seenHashes, classes };
+    const scrapeHealth = data[KEY_HEALTH] || { global: null, classes: {} };
+    return { seenHashes, classes, scrapeHealth };
   }
 
   /**
@@ -312,6 +337,7 @@ function createStore(backend) {
   return {
     ingestPosts,
     ingestAssignments,
+    recordHealth,
     getState,
     getFullState,
     clearAll,
@@ -322,7 +348,7 @@ function createStore(backend) {
   };
 }
 
-const _store = { createStore, chromeBackend, memoryBackend, MAX_POSTS_PER_CLASS, KEY_PREFIX, KEY_CLASS_INDEX };
+const _store = { createStore, chromeBackend, memoryBackend, MAX_POSTS_PER_CLASS, KEY_PREFIX, KEY_CLASS_INDEX, KEY_HEALTH };
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = _store;

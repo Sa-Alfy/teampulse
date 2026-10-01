@@ -232,6 +232,54 @@ async function main() {
     await ctx.close();
   });
 
+  // (5) Scraper health — fake clock, so the grace periods run instantly.
+  async function healthPage(mutate) {
+    const ctx  = await browser.newContext();
+    const page = await ctx.newPage();
+    await page.clock.install();
+    await page.addInitScript({ content: CHROME_STUB_TEAMS });
+    await page.goto(
+      "file:///" + path.join(FIXTURE_DIR, "teams-channel.html").replace(/\\/g, "/")
+    );
+    await page.evaluate(mutate);
+    await page.addScriptTag({ path: path.join(SCRIPT_DIR, "teams-top.js") });
+    const health = () => page.evaluate(() => (window.__msgs || []).filter((m) => m.type === "TP_HEALTH"));
+    return { ctx, page, health };
+  }
+
+  await runTest("health: unresolvable class → one TP_HEALTH no-class after 10 s, not before", async () => {
+    const { ctx, page, health } = await healthPage(() => {
+      document.querySelector('[data-tid="channelTitle-text"]').textContent = "Random";
+    });
+    await page.clock.runFor(8000);
+    assert.strictEqual((await health()).length, 0, "reported before the grace period");
+    await page.clock.runFor(30000);
+    const h = await health();
+    assert.strictEqual(h.length, 1, `Expected exactly 1 TP_HEALTH, got ${h.length}`);
+    assert.deepStrictEqual(h[0], { type: "TP_HEALTH", status: "no-class" });
+    await ctx.close();
+  });
+
+  await runTest("health: class resolved but zero messages → TP_HEALTH no-messages after 60 s", async () => {
+    const { ctx, page, health } = await healthPage(() => {
+      document.querySelectorAll('[data-tid="channel-pane-message"]').forEach((n) => n.remove());
+    });
+    await page.clock.runFor(50000);
+    assert.strictEqual((await health()).length, 0, "reported before the grace period");
+    await page.clock.runFor(20000);
+    const h = await health();
+    assert.strictEqual(h.length, 1, `Expected exactly 1 TP_HEALTH, got ${h.length}`);
+    assert.deepStrictEqual(h[0], { type: "TP_HEALTH", status: "no-messages", className: FIXTURE_CLASS });
+    await ctx.close();
+  });
+
+  await runTest("health: healthy channel never reports", async () => {
+    const { ctx, page, health } = await healthPage(() => {});
+    await page.clock.runFor(120000);
+    assert.strictEqual((await health()).length, 0);
+    await ctx.close();
+  });
+
   // ── assignments-frame.js tests ─────────────────────────────────────────
 
   console.log("\nassignments-frame.js:");

@@ -293,9 +293,41 @@ function buildDigest(state, { newHours, nowMs } = {}) {
  * @param {number} nowMs   — Date.now() or test time
  * @returns {object}       — same top-level shape as GET /api/status
  */
+/**
+ * Scraper problems reported by content scripts (extension only; the server
+ * has no equivalent). A problem is current only while no successful capture
+ * happened after it: page-level ("no-class") is cleared by any newer
+ * last-sync, a class's "no-messages" by that class's newer last-sync.
+ *
+ * @returns {{ kind: string, className: string|null, at: string }[]}
+ */
+function scraperIssues(state) {
+  const health  = (state && state.scrapeHealth) || {};
+  const classes = (state && state.classes) || {};
+  const issues  = [];
+
+  let latestSync = null;
+  for (const c of Object.values(classes)) {
+    if (c.lastSync && (!latestSync || c.lastSync > latestSync)) latestSync = c.lastSync;
+  }
+
+  if (health.global && health.global.at && (!latestSync || health.global.at > latestSync)) {
+    issues.push({ kind: health.global.status, className: null, at: health.global.at });
+  }
+  for (const [cn, entry] of Object.entries(health.classes || {})) {
+    const lastSync = classes[cn] && classes[cn].lastSync;
+    if (entry && entry.at && (!lastSync || entry.at > lastSync)) {
+      issues.push({ kind: entry.status, className: cn, at: entry.at });
+    }
+  }
+  return issues;
+}
+
 function buildStatus(state, nowMs) {
   const resolvedNowMs = (typeof nowMs === "number") ? nowMs : Date.now();
   const serverTime    = new Date(resolvedNowMs).toISOString();
+  const issues        = scraperIssues(state);
+  const scraper       = issues.length > 0 ? "suspect" : "ok";
 
   if (!state || !state.classes || Object.keys(state.classes).length === 0) {
     return {
@@ -307,6 +339,8 @@ function buildStatus(state, nowMs) {
       lastScrape:    null,
       serverTime,
       noDataYet:     true,
+      scraper,
+      scraperIssues: issues,
     };
   }
 
@@ -343,6 +377,8 @@ function buildStatus(state, nowMs) {
     lastRun:       lastRun || null,
     lastScrape,
     serverTime,
+    scraper,
+    scraperIssues: issues,
   };
 }
 
@@ -354,6 +390,7 @@ const _shape = {
   compareAssignments,
   buildDigest,
   buildStatus,
+  scraperIssues,
   NEW_WINDOW_HOURS,
   MAX_WINDOW_HOURS,
   STALE_THRESHOLD_HOURS,

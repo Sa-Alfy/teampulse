@@ -264,7 +264,55 @@
     observer.observe(document.head, { childList: true, subtree: true, characterData: true });
   }
 
+  // ── Scraper health ───────────────────────────────────────────────────────
+  // Teams DOM changes must not fail silently. Report (once per onset) when,
+  // for a sustained period:
+  //   no-class    — a channel view is on screen but the class can't be resolved
+  //   no-messages — the class resolved, but the channel shows zero messages
+  // The popup then shows "Scraper may be out of date". Never sends post data.
+
+  const NO_CLASS_GRACE_MS    = 10_000;
+  const NO_MESSAGES_GRACE_MS = 60_000;
+  const HEALTH_TICK_MS       = 5_000;
+
+  let _problem = null; // { key, since, reported }
+
+  function checkHealth() {
+    const channelView = !!document.querySelector(CHANNEL_TITLE_SELECTOR);
+    const msgCount    = document.querySelectorAll(MESSAGE_SELECTOR).length;
+    const className   = getCurrentClassName();
+
+    let kind = null;
+    let grace = 0;
+    if (!className && (channelView || msgCount > 0)) {
+      kind = "no-class";
+      grace = NO_CLASS_GRACE_MS;
+    } else if (className && channelView && msgCount === 0) {
+      kind = "no-messages";
+      grace = NO_MESSAGES_GRACE_MS;
+    }
+
+    if (!kind) {
+      _problem = null;
+      return;
+    }
+
+    const key = `${kind}|${className || ""}`;
+    const now = Date.now();
+    if (!_problem || _problem.key !== key) _problem = { key, since: now, reported: false };
+    if (_problem.reported || now - _problem.since < grace) return;
+
+    _problem.reported = true;
+    chrome.runtime.sendMessage(
+      kind === "no-class" ? { type: "TP_HEALTH", status: kind }
+                          : { type: "TP_HEALTH", status: kind, className }
+    );
+  }
+
+  setInterval(checkHealth, HEALTH_TICK_MS);
+
   // Initial check on load
   tryFlushPosts();
+  checkHealth();
 })();
 
