@@ -20,12 +20,12 @@ const assert       = require("assert");
 
 const FIXTURE_DIR  = path.join(__dirname, "fixtures");
 const SCRIPT_DIR   = path.join(__dirname, "..", "extension", "content");
+const FIXTURE_CLASS = "Summer_2026_CSE 312 (V1)_ 232_D4";
 
 // ── Chrome stubs ───────────────────────────────────────────────────────────
 const CHROME_STUB_TEAMS = `
 (function() {
   window.__msgs = [];
-  window.__TP_TEST_CLASS = "Test CSE 312";
   window.chrome = {
     runtime: {
       id: "test-extension-id",
@@ -118,7 +118,9 @@ async function main() {
     assert.ok(postMsgs.length >= 1, `Expected ≥1 TP_POSTS, got ${postMsgs.length}`);
     const first = postMsgs[0];
     assert.strictEqual(first.posts.length, 2, `Expected 2 posts, got ${first.posts.length}`);
-    assert.strictEqual(first.className, "Test CSE 312", "className should come from override");
+    assert.strictEqual(first.className, FIXTURE_CLASS, "className should come from document.title");
+    const ctxMsgs = msgs.filter((m) => m.type === "TP_CLASS_CONTEXT");
+    assert.strictEqual(ctxMsgs[0] && ctxMsgs[0].className, FIXTURE_CLASS, "TP_CLASS_CONTEXT should carry the class");
     assert.ok(typeof first.scrapedAt === "string", "scrapedAt should be an ISO string");
 
     // Verify all field names match scrape-posts.js extractPosts() output.
@@ -194,6 +196,38 @@ async function main() {
     const msgs     = await page.evaluate(() => window.__msgs || []);
     const postMsgs = msgs.filter((m) => m.type === "TP_POSTS");
     assert.strictEqual(postMsgs.length, 0, `Expected 0 TP_POSTS, got ${postMsgs.length}`);
+
+    await ctx.close();
+  });
+
+  // (4) Class detection: unresolvable → silent; SPA switch → new context
+  await runTest("class name: title/heading mismatch sends nothing; SPA switch re-sends context", async () => {
+    const ctx  = await browser.newContext();
+    const page = await ctx.newPage();
+    await page.addInitScript({ content: CHROME_STUB_TEAMS });
+    await page.goto(
+      "file:///" + path.join(FIXTURE_DIR, "teams-channel.html").replace(/\\/g, "/")
+    );
+    // Heading no longer matches any title segment → class unresolvable.
+    await page.evaluate(() => {
+      document.querySelector('[data-tid="channelTitle-text"]').textContent = "Random";
+    });
+    await page.addScriptTag({ path: path.join(SCRIPT_DIR, "teams-top.js") });
+    await page.waitForTimeout(2500);
+    let msgs = await page.evaluate(() => window.__msgs || []);
+    assert.strictEqual(msgs.length, 0, `Expected no messages, got ${msgs.length}`);
+
+    // Navigate (SPA-style) to another class: title + heading change together.
+    await page.evaluate(() => {
+      document.title = "Teams and Channels | Summer_2026_CSE 311 (V1)_ 232_D2 | Lab | Microsoft Teams";
+      document.querySelector('[data-tid="channelTitle-text"]').textContent = "Lab";
+    });
+    msgs = await waitPostMsgs(page, 1, 5000);
+    const ctxMsgs = msgs.filter((m) => m.type === "TP_CLASS_CONTEXT");
+    const post    = msgs.find((m) => m.type === "TP_POSTS");
+    assert.strictEqual(ctxMsgs.length, 1, "Expected one TP_CLASS_CONTEXT");
+    assert.strictEqual(ctxMsgs[0].className, "Summer_2026_CSE 311 (V1)_ 232_D2");
+    assert.strictEqual(post && post.className, "Summer_2026_CSE 311 (V1)_ 232_D2");
 
     await ctx.close();
   });

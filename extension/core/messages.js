@@ -26,7 +26,7 @@
 
 const TEAMS_ORIGINS = new Set([
   "https://teams.microsoft.com",
-  "https://teams.cloud.microsoft", // UNVERIFIED: included and flagged per spec
+  "https://teams.cloud.microsoft", // seen live via tools/dom-probe.js (2026-10-01)
 ]);
 
 const ASSIGNMENTS_ORIGIN = "https://assignments.edu.cloud.microsoft";

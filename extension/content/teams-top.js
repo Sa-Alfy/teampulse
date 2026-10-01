@@ -1,8 +1,8 @@
 /**
  * extension/content/teams-top.js — Top-frame content script for Teams.
  *
- * Runs in the top frame of https://teams.microsoft.com (and the unverified
- * https://teams.cloud.microsoft — see NOT VERIFIED below).
+ * Runs in the top frame of https://teams.microsoft.com and
+ * https://teams.cloud.microsoft (the latter seen live via tools/dom-probe.js).
  *
  * Responsibilities:
  *   1. Detect the current class name from the open-channel DOM.
@@ -15,18 +15,12 @@
  * No auto-scrolling (read-only).
  *
  * ── NOT VERIFIED ──────────────────────────────────────────────────────────
- * getCurrentClassName() currently returns null because no element in the
- * open-channel DOM has been confirmed to carry the full class name string
- * (the same string openTeamsList() reads from [data-testid="team-name"]).
- *
- * To fix this, please open Teams in Chrome with the extension loaded, open
- * any class channel, right-click the class title in the left sidebar or the
- * channel header and paste the outerHTML of the element that contains the
- * full class name (e.g. "Summer_2026_CSE 312 (V1)_232_D4" or just
- * "CSE 312").
- *
- * Until that selector is confirmed, this script sends nothing in production
- * (no className → no messages sent).
+ * getCurrentClassName() reads the team name from document.title, anchored on
+ * the channel heading (one live probe sample, 2026-10-01). Not yet confirmed:
+ * that the title segment is byte-identical to the [data-testid="team-name"]
+ * text the Playwright scraper stores (self-host and extension keys must
+ * match), and that the layout holds for other views/locales. If the signals
+ * disagree, it returns null and nothing is sent.
  * ──────────────────────────────────────────────────────────────────────────
  */
 
@@ -38,6 +32,7 @@
   const MESSAGE_SELECTOR   = '[data-tid="channel-pane-message"]';
   const SUBHEADER_SELECTOR = '[data-tid="post-message-subheader"]';
   const TIMESTAMP_SELECTOR = '[data-tid="timestamp"]';
+  const CHANNEL_TITLE_SELECTOR = '[data-tid="channelTitle-text"]';
   const DEBOUNCE_MS        = 1500;
 
   // ── Helpers ──────────────────────────────────────────────────────────────
@@ -46,19 +41,28 @@
   const normWs   = (s) => s.replace(/[\s\u00a0]+/g, " ").trim();
 
   /**
-   * Attempt to read the class name from the open-channel DOM.
+   * Read the class (team) name of the open channel.
    *
-   * NOT VERIFIED — see module header. Returns null until confirmed.
-   *
-   * For testing: if window.__TP_TEST_CLASS is set, returns that string.
+   * Confirmed by tools/dom-probe.js on https://teams.cloud.microsoft (2026-10-01):
+   *   document.title = "Teams and Channels | <team name> | <channel> | Microsoft Teams"
+   *   h2[data-tid="channelTitle-text"] = "<channel>"
+   * The team name is the title segment immediately before the segment equal to
+   * the channel heading. Requiring both signals to agree means an unexpected
+   * title layout yields null (nothing sent) rather than a wrong class.
    *
    * @returns {string|null}
    */
   function getCurrentClassName() {
-    if (typeof window !== "undefined" && typeof window.__TP_TEST_CLASS === "string" && window.__TP_TEST_CLASS) {
-      return window.__TP_TEST_CLASS;
-    }
-    return null;
+    const heading = document.querySelector(CHANNEL_TITLE_SELECTOR);
+    const channel = heading ? normWs(heading.textContent || "") : "";
+    if (!channel) return null;
+
+    const segments = (document.title || "").split(" | ").map((s) => s.trim());
+    const idx = segments.findIndex((s, i) => i > 0 && normWs(s) === channel);
+    if (idx < 1) return null;
+
+    const team = segments[idx - 1];
+    return team ? team : null;
   }
 
   /**
@@ -254,6 +258,11 @@
     attributes:    false,
     characterData: false,
   });
+
+  // SPA navigation changes <title> (in <head>), which the body observer misses.
+  if (document.head) {
+    observer.observe(document.head, { childList: true, subtree: true, characterData: true });
+  }
 
   // Initial check on load
   tryFlushPosts();
