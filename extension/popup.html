@@ -23,15 +23,15 @@
           <button id="filterToggleBtn" class="icon-btn" title="Toggle filters" aria-label="Toggle filters" aria-expanded="false">
             <span class="filter-icon">🔍</span>
           </button>
-          <button id="refreshBtn" class="icon-btn" title="Refresh data now" aria-label="Refresh">
+          <button id="refreshBtn" class="icon-btn" title="Reload stored data" aria-label="Reload">
             <span class="refresh-icon">🔄</span>
           </button>
         </div>
       </div>
       <div class="header-sub">
-        <span id="lastScrapeText">Last scrape: checking...</span>
+        <span id="lastScrapeText">Last capture: checking...</span>
         <span class="dot-separator">•</span>
-        <span id="syncTimer">Synced just now</span>
+        <span id="syncTimer">Stored on this device</span>
       </div>
     </header>
 
@@ -70,6 +70,9 @@
       </div>
     </section>
 
+    <!-- Stale-data banner -->
+    <div class="stale-banner hidden" id="staleBanner" role="status">Data is old. Open Teams to refresh.</div>
+
     <!-- Main Content -->
     <main class="main-content" id="mainContent">
       <!-- Loading State -->
@@ -78,31 +81,13 @@
         <p class="state-title">Loading academic briefing...</p>
       </div>
 
-      <!-- Offline State -->
-      <div class="state-view hidden" id="offlineState">
-        <div class="state-icon">🔌</div>
-        <p class="state-title">Server Offline</p>
-        <p class="state-msg">
-          Cannot connect to TeamsPulse local server at <code>localhost:3457</code>.
-        </p>
-        <div class="instructions-box">
-          <p>Run this command in your terminal:</p>
-          <code>npm run server</code>
-        </div>
-        <button id="retryBtn" class="action-btn">Retry Connection</button>
-      </div>
-
       <!-- No Data State -->
       <div class="state-view hidden" id="noDataState">
         <div class="state-icon">📂</div>
-        <p class="state-title">No Scraped Data Found</p>
+        <p class="state-title">No data yet</p>
         <p class="state-msg">
-          Run the Teams scraper to capture notices and assignments:
+          No data yet. Open Microsoft Teams in this browser and visit one of your classes.
         </p>
-        <div class="instructions-box">
-          <code>npm run scrape</code>
-          <code>npm run digest</code>
-        </div>
       </div>
 
       <!-- Filter Empty State -->
@@ -120,10 +105,15 @@
 
     <!-- Footer -->
     <footer class="footer">
-      <span id="footerStats">Connecting...</span>
+      <span id="footerStats">Loading...</span>
+      <button id="clearDataBtn" class="link-btn" type="button">Clear stored data</button>
     </footer>
   </div>
 
+  <script src="core/digest-utils.js"></script>
+  <script src="core/store.js"></script>
+  <script src="core/shape.js"></script>
+  <script src="core/messages.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

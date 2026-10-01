@@ -260,6 +260,8 @@ async function main() {
     await ctx.close();
   });
 
+  await require("./popup-xss.test.js").run(browser, runTest);
+
   // ── Summary ────────────────────────────────────────────────────────────
 
   console.log(`\n${"─".repeat(46)}`);

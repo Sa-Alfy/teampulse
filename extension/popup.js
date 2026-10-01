@@ -1,22 +1,23 @@
 /**
  * popup.js — TeamsPulse Chrome/Edge Extension Logic
  *
- * Real-time academic dashboard with:
- * - Real-time auto-polling every 15 seconds
- * - Full categorization of announcements and assignments BY CLASS
- * - Category tabs (All, Announcements, Tasks)
- * - Class & time filters + instant keyword search
- * - Dark mode modern UI
+ * Standalone: reads everything from chrome.storage.local via core/store.js and
+ * shapes it with core/shape.js. Makes no network requests. Live-updates on
+ * chrome.storage.onChanged instead of polling.
+ *
+ * Scraped text is untrusted — it is only ever written with textContent.
  */
 
 "use strict";
 
-const API_BASE = "http://localhost:3457";
+const store = TP.createStore(TP.chromeBackend());
+const TAB_CTX_PREFIX = TP.tabCtxKey("");
 
 // DOM Elements
 const refreshBtn       = document.getElementById("refreshBtn");
 const filterToggleBtn  = document.getElementById("filterToggleBtn");
-const retryBtn         = document.getElementById("retryBtn");
+const clearDataBtn     = document.getElementById("clearDataBtn");
+const staleBanner      = document.getElementById("staleBanner");
 const controlsBar      = document.getElementById("controlsBar");
 const classFilter      = document.getElementById("classFilter");
 const timeFilter       = document.getElementById("timeFilter");
@@ -39,7 +40,6 @@ const countAssignments = document.getElementById("countAssignments");
 
 // State containers
 const loadingState     = document.getElementById("loadingState");
-const offlineState     = document.getElementById("offlineState");
 const noDataState      = document.getElementById("noDataState");
 const filterEmptyState = document.getElementById("filterEmptyState");
 const feedContainer    = document.getElementById("feedContainer");
@@ -49,9 +49,8 @@ const classList        = document.getElementById("classList");
 let activeTab          = "all"; // "all" | "notices" | "assignments"
 let rawDigestData      = null;
 let rawStatusData      = null;
-let lastSyncTimestamp  = null;
-let pollingInterval    = null;
 let tickerInterval     = null;
+let reloadTimer        = null;
 let collapsedState     = {};
 
 function getStoredCollapseState() {
@@ -130,7 +129,6 @@ function getTagClass(tag) {
 
 function setView(viewName) {
   loadingState.classList.add("hidden");
-  offlineState.classList.add("hidden");
   noDataState.classList.add("hidden");
   filterEmptyState.classList.add("hidden");
   feedContainer.classList.add("hidden");
@@ -138,9 +136,6 @@ function setView(viewName) {
   switch (viewName) {
     case "loading":
       loadingState.classList.remove("hidden");
-      break;
-    case "offline":
-      offlineState.classList.remove("hidden");
       break;
     case "no-data":
       noDataState.classList.remove("hidden");
@@ -154,47 +149,25 @@ function setView(viewName) {
   }
 }
 
-function setConnectionStatus(isOnline) {
-  if (isOnline) {
+function setHealthPill(health) {
+  if (health === "ok") {
     liveBadge.classList.remove("offline");
-    liveText.textContent = "Live";
+    liveText.textContent = "Fresh";
   } else {
     liveBadge.classList.add("offline");
-    liveText.textContent = "Offline";
+    liveText.textContent = "Stale";
   }
 }
 
-function updateBadge(newPostCount) {
-  const count = typeof newPostCount === "number" ? newPostCount : 0;
-  const text = count > 0 ? String(count) : "";
+function setBadge(text) {
   if (typeof chrome !== "undefined" && chrome.action && typeof chrome.action.setBadgeText === "function") {
     chrome.action.setBadgeText({ text });
-    if (text && typeof chrome.action.setBadgeBackgroundColor === "function") {
-      chrome.action.setBadgeBackgroundColor({ color: "#6264a7" });
-    }
   }
 }
 
 // ---------------------------------------------------------------------------
-// Data Fetching & Sync
+// Data (local storage only — no network)
 // ---------------------------------------------------------------------------
-
-async function fetchFromApi(endpoint) {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 2500);
-  try {
-    const res = await fetch(`${API_BASE}${endpoint}`, {
-      signal: ctrl.signal,
-      cache: "no-store",
-    });
-    clearTimeout(timer);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return await res.json();
-  } catch (err) {
-    clearTimeout(timer);
-    throw err;
-  }
-}
 
 async function loadData(silent = false) {
   if (!silent) {
@@ -202,62 +175,68 @@ async function loadData(silent = false) {
   }
 
   try {
-    const [status, digest] = await Promise.all([
-      fetchFromApi("/api/status"),
-      fetchFromApi("/api/digest"),
-      collapseStatePromise,
-    ]);
-
-    rawStatusData = status;
-    rawDigestData = digest;
-    lastSyncTimestamp = Date.now();
-    setConnectionStatus(true);
-    updateBadge(rawDigestData ? rawDigestData.newPostCount : 0);
+    const [state] = await Promise.all([store.getState(), collapseStatePromise]);
+    const nowMs = Date.now();
+    rawStatusData = TP.buildStatus(state, nowMs);
+    rawDigestData = TP.buildDigest(state, { nowMs });
 
     updateHeaderMeta();
     updateClassDropdown();
     applyFiltersAndRender();
   } catch (err) {
-    setConnectionStatus(false);
-    if (!rawDigestData) {
-      setView("offline");
-    }
+    rawStatusData = null;
+    rawDigestData = null;
+    footerStats.textContent = "Could not read stored data.";
+    setView("no-data");
   } finally {
     refreshBtn.querySelector(".refresh-icon").classList.remove("spinning");
   }
 }
 
-function updateHeaderMeta() {
-  if (rawStatusData) {
-    if (rawStatusData.lastScrape) {
-      lastScrapeText.textContent = `Last scrape: ${formatRelativeTime(rawStatusData.lastScrape)}`;
-    } else if (rawStatusData.lastRun) {
-      lastScrapeText.textContent = `Last run: ${formatRelativeTime(rawStatusData.lastRun)}`;
-    } else {
-      lastScrapeText.textContent = "No runs yet";
-    }
-
-    const totalSeen = rawStatusData.totalSeen || 0;
-    const newCount = rawDigestData ? (rawDigestData.newPostCount || 0) : 0;
-    footerStats.textContent = `${totalSeen} posts indexed · ${newCount} new today · port 3457`;
-  }
-  updateSyncTimerText();
+function scheduleReload() {
+  if (reloadTimer !== null) clearTimeout(reloadTimer);
+  reloadTimer = setTimeout(() => {
+    reloadTimer = null;
+    loadData(true);
+  }, 300);
 }
 
-function updateSyncTimerText() {
-  if (!lastSyncTimestamp) {
-    syncTimer.textContent = "Syncing...";
-    return;
-  }
-  const seconds = Math.floor((Date.now() - lastSyncTimestamp) / 1000);
-  if (seconds < 5) {
-    syncTimer.textContent = "Synced just now";
-  } else if (seconds < 60) {
-    syncTimer.textContent = `Synced ${seconds}s ago`;
+function updateHeaderMeta() {
+  if (!rawStatusData) return;
+  const noData = Boolean(rawStatusData.noDataYet);
+
+  if (rawStatusData.lastScrape) {
+    lastScrapeText.textContent = `Last capture: ${formatRelativeTime(rawStatusData.lastScrape)}`;
   } else {
-    const mins = Math.floor(seconds / 60);
-    syncTimer.textContent = `Synced ${mins}m ago`;
+    lastScrapeText.textContent = "Nothing captured yet";
   }
+
+  setHealthPill(rawStatusData.health);
+  staleBanner.classList.toggle("hidden", noData || rawStatusData.health !== "stale");
+
+  const totalSeen = rawStatusData.totalSeen || 0;
+  const newCount = rawDigestData ? (rawDigestData.newPostCount || 0) : 0;
+  footerStats.textContent = `${totalSeen} posts indexed · ${newCount} new today`;
+}
+
+// Two-step confirm inside the popup (native confirm() dialogs are unreliable
+// in extension popups).
+let clearConfirmTimer = null;
+
+async function clearAllData() {
+  await store.clearAll();
+  if (chrome.storage && chrome.storage.session) {
+    const all = await chrome.storage.session.get(null);
+    const ctxKeys = Object.keys(all || {}).filter((k) => k.startsWith(TAB_CTX_PREFIX));
+    if (ctxKeys.length > 0) await chrome.storage.session.remove(ctxKeys);
+  }
+  setBadge("");
+}
+
+function resetClearButton() {
+  clearConfirmTimer = null;
+  clearDataBtn.classList.remove("confirming");
+  clearDataBtn.textContent = "Clear stored data";
 }
 
 // ---------------------------------------------------------------------------
@@ -268,7 +247,7 @@ function updateClassDropdown() {
   if (!rawDigestData || !rawDigestData.classes) return;
 
   const currentSelection = classFilter.value;
-  classFilter.innerHTML = `<option value="all">All Classes</option>`;
+  classFilter.replaceChildren(new Option("All Classes", "all"));
 
   for (const c of rawDigestData.classes) {
     const totalItems = (c.noticesCount || 0) + (c.assignmentsCount || 0);
@@ -314,6 +293,12 @@ function assignmentMatchesTimeFilter(assignment, timeOption) {
   return Math.abs(due - Date.now()) <= windowMs;
 }
 
+function setSectionLabel(el, icon, text) {
+  const iconSpan = document.createElement("span");
+  iconSpan.textContent = icon;
+  el.replaceChildren(iconSpan, document.createTextNode(` ${text}`));
+}
+
 function matchesSearch(text, query) {
   if (!query) return true;
   return (text || "").toLowerCase().includes(query);
@@ -333,7 +318,7 @@ function applyFiltersAndRender() {
   let globalTotalTasks   = 0;
   let visibleClassesCount = 0;
 
-  classList.innerHTML = "";
+  classList.replaceChildren();
 
   for (const c of rawDigestData.classes) {
     // Check class filter (against the raw key — see updateClassDropdown)
@@ -454,7 +439,7 @@ function applyFiltersAndRender() {
     if (showNotices) {
       const secLabel = document.createElement("div");
       secLabel.className = "section-label";
-      secLabel.innerHTML = `<span>📢</span> Announcements & Notices (${matchingNotices.length})`;
+      setSectionLabel(secLabel, "📢", `Announcements & Notices (${matchingNotices.length})`);
       body.appendChild(secLabel);
 
       for (const notice of matchingNotices) {
@@ -516,7 +501,7 @@ function applyFiltersAndRender() {
     if (showTasks) {
       const secLabel = document.createElement("div");
       secLabel.className = "section-label";
-      secLabel.innerHTML = `<span>📝</span> Assignments (${matchingAssignments.length})`;
+      setSectionLabel(secLabel, "📝", `Assignments (${matchingAssignments.length})`);
       body.appendChild(secLabel);
 
       for (const a of matchingAssignments) {
@@ -630,35 +615,45 @@ filterToggleBtn.addEventListener("click", () => {
   }
 });
 
-// Refresh & Retry
+// Reload from storage
 refreshBtn.addEventListener("click", () => {
   loadData(false);
 });
 
-retryBtn.addEventListener("click", () => {
-  setView("loading");
-  loadData(false);
+// Clear stored data (two-step confirm)
+clearDataBtn.addEventListener("click", async () => {
+  if (clearConfirmTimer === null) {
+    clearDataBtn.classList.add("confirming");
+    clearDataBtn.textContent = "Click again to delete all data";
+    clearConfirmTimer = setTimeout(resetClearButton, 4000);
+    return;
+  }
+  clearTimeout(clearConfirmTimer);
+  resetClearButton();
+  try {
+    await clearAllData();
+  } finally {
+    loadData(false);
+  }
 });
 
 // ---------------------------------------------------------------------------
-// Lifecycle & Auto-Sync
+// Lifecycle & live updates
 // ---------------------------------------------------------------------------
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== "local") return;
+  if (Object.keys(changes).some((k) => k.startsWith(TP.KEY_PREFIX))) scheduleReload();
+});
 
 document.addEventListener("DOMContentLoaded", () => {
   loadData(false);
 
-  // Auto-sync polling every 15 seconds while popup is open
-  pollingInterval = setInterval(() => {
-    loadData(true);
-  }, 15000);
-
-  // Sync timer ticker every 5 seconds
-  tickerInterval = setInterval(() => {
-    updateSyncTimerText();
-  }, 5000);
+  // Relative "Last capture" text and the 36 h stale check age with time.
+  tickerInterval = setInterval(() => loadData(true), 60000);
 });
 
 window.addEventListener("unload", () => {
-  if (pollingInterval) clearInterval(pollingInterval);
   if (tickerInterval) clearInterval(tickerInterval);
+  if (reloadTimer) clearTimeout(reloadTimer);
 });

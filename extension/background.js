@@ -1,12 +1,12 @@
 /**
  * background.js — TeamsPulse Background Service Worker (Manifest V3)
  *
- * Phase 2 additions:
- *   - importScripts for core modules (digest-utils, fingerprint, store, messages)
+ *   - importScripts for core modules (digest-utils, fingerprint, store, shape, messages)
  *   - chrome.runtime.onMessage listener routing content script messages to handleMessage
  *   - chrome.tabs.onRemoved listener clearing tab context
+ *   - toolbar badge = buildDigest(state).newPostCount, computed from local storage
  *
- * Phase 1 localhost badge polling stays intact (removed in Phase 3).
+ * Makes no network requests.
  */
 
 "use strict";
@@ -15,6 +15,7 @@ importScripts(
   "core/digest-utils.js",
   "core/fingerprint.js",
   "core/store.js",
+  "core/shape.js",
   "core/messages.js"
 );
 
@@ -75,51 +76,53 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   _sessionBackend.remove(key).catch(() => {});
 });
 
-// ── Localhost Polling (Phase 1 legacy — removed in Phase 3) ─────────────────
+// ── Badge (local data only) ─────────────────────────────────────────────────
 
-const API_BASE = "http://localhost:3457";
-const ALARM_NAME = "teamspulse-badge-poll";
+const LEGACY_ALARM = "teamspulse-badge-poll"; // old 1-minute localhost poll
+const BADGE_ALARM  = "teamspulse-badge-refresh";
+const BADGE_PERIOD_MIN = 30; // the 24 h "new" window ages with time
 
-async function updateBadge() {
+async function refreshBadge() {
   try {
-    const res = await fetch(`${API_BASE}/api/digest`, { cache: "no-store" });
-    if (!res.ok) return;
-    const data = await res.json();
-    const count = typeof data.newPostCount === "number" ? data.newPostCount : 0;
-    const text = count > 0 ? String(count) : "";
-    if (typeof chrome !== "undefined" && chrome.action && typeof chrome.action.setBadgeText === "function") {
-      await chrome.action.setBadgeText({ text });
-      if (text && typeof chrome.action.setBadgeBackgroundColor === "function") {
-        await chrome.action.setBadgeBackgroundColor({ color: "#6264a7" });
-      }
-    }
+    const state = await _store.getState();
+    const count = TP.buildDigest(state).newPostCount || 0;
+    const text  = count > 0 ? String(count) : "";
+    await chrome.action.setBadgeText({ text });
+    if (text) await chrome.action.setBadgeBackgroundColor({ color: "#6264a7" });
   } catch {
-    // Server might be offline or unreachable; ignore
+    // Storage unavailable (e.g. during shutdown); next trigger retries.
   }
 }
 
-// Set up periodic alarm
+let _badgeTimer = null;
+function scheduleBadgeRefresh() {
+  if (_badgeTimer !== null) clearTimeout(_badgeTimer);
+  _badgeTimer = setTimeout(() => {
+    _badgeTimer = null;
+    refreshBadge();
+  }, 500);
+}
+
+function setupAlarms() {
+  chrome.alarms.clear(LEGACY_ALARM);
+  chrome.alarms.create(BADGE_ALARM, { periodInMinutes: BADGE_PERIOD_MIN });
+}
+
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.alarms.create(ALARM_NAME, { periodInMinutes: 1 });
-  updateBadge();
+  setupAlarms();
+  refreshBadge();
 });
 
 chrome.runtime.onStartup.addListener(() => {
-  updateBadge();
+  setupAlarms();
+  refreshBadge();
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === ALARM_NAME) {
-    updateBadge();
-  }
+  if (alarm.name === BADGE_ALARM) refreshBadge();
 });
 
-// Register alarm if not yet scheduled and update badge on service worker startup
-chrome.alarms.get(ALARM_NAME, (alarm) => {
-  if (!alarm) {
-    chrome.alarms.create(ALARM_NAME, { periodInMinutes: 1 });
-  }
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== "local") return;
+  if (Object.keys(changes).some((k) => k.startsWith(TP.KEY_PREFIX))) scheduleBadgeRefresh();
 });
-
-updateBadge();
-

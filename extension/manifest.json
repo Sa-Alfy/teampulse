@@ -1,10 +1,12 @@
 {
   "manifest_version": 3,
   "name": "TeamsPulse",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Daily academic briefing from Microsoft Teams — new posts only.",
-  "permissions": ["alarms", "storage", "tabs"],
-  "host_permissions": ["http://localhost:3457/*"],
+  "permissions": ["alarms", "storage", "unlimitedStorage"],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'"
+  },
   "background": {
     "service_worker": "background.js"
   },
@@ -36,4 +38,3 @@
     }
   ]
 }
-
