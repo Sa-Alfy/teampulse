@@ -1,4 +1,4 @@
-﻿# TeamsPulse ðŸŽ“âš¡
+# TeamsPulse ðŸŽ“âš¡
 
 > **Turn chaotic Microsoft Teams courses into a clean, automated academic briefing.**  
 > Scrapes classes, tracks assignments, extracts Class Test (CT) dates, and delivers a unified daily digest â€” showing only what's **new since the last run**.
