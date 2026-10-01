@@ -191,3 +191,27 @@ test("sectionLabel: pulls the parenthesised section", () => {
   assert.strictEqual(sectionLabel("Summer_2026_CSE 312 (V1)_232_D4"), "V1");
   assert.strictEqual(sectionLabel("No section here"), null);
 });
+
+// Regression: only the first regex match used to be tried, so a non-month
+// word right after an earlier number ("CT-2 will", "on 5") hid the real date
+// and the digest fell back to the post date.
+test("extractDate: real date after a number+word that isn't a month", () => {
+  assert.strictEqual(
+    extractDate("CT-2 will be held on 5 October 2026 at 10:00 AM in room 301.", 2026),
+    "2026-10-05"
+  );
+  assert.strictEqual(extractDate("Final exam on 20 October 2026.", 2026), "2026-10-20");
+  assert.strictEqual(extractDate("Group 3 meets on Oct 5, 2026", 2026), "2026-10-05");
+  assert.strictEqual(extractDate("Room 301 booked: quiz on 5th Oct", 2026), "2026-10-05");
+});
+
+test("extractDate: ordinals and month-first forms", () => {
+  assert.strictEqual(extractDate("Quiz on 5th Oct", 2026), "2026-10-05");
+  assert.strictEqual(extractDate("Due Oct 5, 2026", 2025), "2026-10-05");
+  assert.strictEqual(extractDate("Submit by 21st of nothing, then Aug 21", 2026), "2026-08-21");
+});
+
+test("extractDate: earliest date in the text wins across both word forms", () => {
+  assert.strictEqual(extractDate("Oct 5 quiz, then final on 20 October", 2026), "2026-10-05");
+  assert.strictEqual(extractDate("5 October quiz, then final Oct 20", 2026), "2026-10-05");
+});

@@ -74,33 +74,40 @@ function extractDate(text, fallbackYear) {
     return null;
   }
 
+  // Word-month dates. Every match is considered, not just the first: in
+  // "CT-2 will be held on 5 October 2026" the first day-first candidate is
+  // "2 will" and the first month-first candidate is "on 5" — neither a month.
+  // The earliest real date in the text wins.
+  let best = null; // { index, value }
+  const consider = (index, year, month, day) => {
+    if (!isRealDate(year, month, day)) return;
+    if (!best || index < best.index) best = { index, value: formatDate(year, month, day) };
+  };
+
   // ── Day-first: "26th August", "26 August 2026" ────────────────────────────
-  m = text.match(/\b(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]{3,9})\.?(?:,?\s+(\d{4}))?\b/);
-  if (m && MONTHS[m[2].toLowerCase()] !== undefined) {
-    const day = parseInt(m[1], 10);
-    const month = MONTHS[m[2].toLowerCase()] + 1;
-    const year = m[3] ? parseInt(m[3], 10) : fallbackYear;
-    if (isRealDate(year, month, day)) return formatDate(year, month, day);
+  for (const d of text.matchAll(/\b(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]{3,9})\.?(?:,?\s+(\d{4}))?\b/g)) {
+    const monthIdx = MONTHS[d[2].toLowerCase()];
+    if (monthIdx === undefined) continue;
+    const year = d[3] ? parseInt(d[3], 10) : fallbackYear;
+    consider(d.index, year, monthIdx + 1, parseInt(d[1], 10));
   }
 
   // ── Month-first: "August 29, 2026", "Aug 21" ──────────────────────────────
-  m = text.match(/\b([A-Za-z]{3,9})\.?\s+(\d{1,2})(st|nd|rd|th)?(?:\s*,?\s*(\d{4}))?\b/);
-  if (m && MONTHS[m[1].toLowerCase()] !== undefined) {
-    const monthWord = m[1].toLowerCase();
-    const hasOrdinal = !!m[3];
-    const hasYear = !!m[4];
-    const hasComma = /\d\s*,/.test(m[0]);
+  for (const d of text.matchAll(/\b([A-Za-z]{3,9})\.?\s+(\d{1,2})(st|nd|rd|th)?(?:\s*,?\s*(\d{4}))?\b/g)) {
+    const monthWord = d[1].toLowerCase();
+    if (MONTHS[monthWord] === undefined) continue;
+    const hasOrdinal = !!d[3];
+    const hasYear = !!d[4];
+    const hasComma = /\d\s*,/.test(d[0]);
 
     // "may 5" needs a supporting signal; "aug 21" does not.
     if (!AMBIGUOUS_MONTHS.has(monthWord) || hasOrdinal || hasYear || hasComma) {
-      const day = parseInt(m[2], 10);
-      const month = MONTHS[monthWord] + 1;
-      const year = hasYear ? parseInt(m[4], 10) : fallbackYear;
-      if (isRealDate(year, month, day)) return formatDate(year, month, day);
+      const year = hasYear ? parseInt(d[4], 10) : fallbackYear;
+      consider(d.index, year, MONTHS[monthWord] + 1, parseInt(d[2], 10));
     }
   }
 
-  return null;
+  return best ? best.value : null;
 }
 
 /** Tidy a matched time string: collapse spaces, "9.30" → "9:30", "am" → "AM". */
