@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Assignments Virtualized Fixture</title>
+  <style>
+    #scroller { height: 400px; overflow-y: auto; }
+    .spacer { position: relative; }
+    .row { position: absolute; left: 0; right: 0; height: 120px; }
+  </style>
+</head>
+<body>
+<!--
+  Reproduces the live failures (2026-10-01): loads at "/" and routes to
+  /classes/all/list later; a virtualized Past-due list (only rows near the
+  viewport exist); empty Upcoming; tab content swaps ~600 ms after the click;
+  "15 points" lines; headers "Mon DDth" + "Due N months ago".
+  DISCLAIMER: proves logic only, not compatibility with the live DOM.
+-->
+<div role="tablist">
+  <button data-test="Upcoming"  role="tab" aria-selected="false">Upcoming</button>
+  <button data-test="Past due"  role="tab" aria-selected="true">Past due</button>
+  <button data-test="Completed" role="tab" aria-selected="false">Completed</button>
+</div>
+<div id="scroller"><div role="list" data-test="assignment-list"><div class="spacer" id="spacer"></div></div></div>
+
+<script>
+(() => {
+  const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const CLASSES = ["Summer_2026_CSE 312 (V1)_ 232_D4", "CSE 204 (Digital Logic Design DLD Lab)"];
+  // 30 past-due items, newest first: Sep 20th back to Mar 2026 (one per ~6 days).
+  const PAST = Array.from({ length: 30 }, (_, i) => {
+    const d = new Date(2026, 8, 20 - i * 6);
+    const day = d.getDate(), sfx = [, "st", "nd", "rd"][day % 10 > 3 || ~~(day / 10) === 1 ? 0 : day % 10] || "th";
+    return { id: `0000000${String(i).padStart(1, "0")}-1111-4222-8333-${String(i).padStart(12, "0")}`.slice(-36),
+             title: `Item ${i + 1}`, header: `${MONTHS[d.getMonth()]} ${day}${sfx}`,
+             iso: `2026-${String(d.getMonth() + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`,
+             cls: CLASSES[i % 2], points: i % 3 === 0 };
+  });
+  window.__PAST = PAST;
+  const ROW = 120;
+  let current = "Past due";
+  const scroller = document.getElementById("scroller");
+  const spacer = document.getElementById("spacer");
+  const el = (tag, attrs, text) => {
+    const e = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs || {})) e.setAttribute(k, v);
+    if (text) e.textContent = text;
+    return e;
+  };
+  function row(item, i) {
+    const r = el("div", { class: "row", role: "group" });
+    r.style.top = `${i * ROW}px`;
+    const h = el("div", { role: "presentation", id: `groupHeader_${i}` });
+    h.append(el("span", {}, item.header), el("span", {}, "Due 2 months ago"));
+    const card = el("div", { role: "listitem", "data-test": "assignment-card", id: item.id, class: "fui-Card" });
+    card.append(el("span", { "data-test": "assignment-card-title-all-up-view" }, item.title),
+                el("div", { role: "presentation" }, "Due at 11:59 PM"),
+                el("div", { role: "presentation" }, item.cls));
+    if (item.points) card.append(el("div", { role: "presentation" }, "15 points"));
+    r.append(h, card);
+    return r;
+  }
+  function render() {
+    const items = current === "Past due" ? PAST : [];
+    spacer.style.height = `${items.length * ROW}px`;
+    const first = Math.max(0, Math.floor(scroller.scrollTop / ROW) - 1);
+    const last  = Math.min(items.length, Math.ceil((scroller.scrollTop + 400) / ROW) + 1);
+    spacer.replaceChildren(...items.slice(first, last).map((it, k) => row(it, first + k)));
+  }
+  scroller.addEventListener("scroll", render);
+  document.querySelectorAll("[role='tab']").forEach((tab) => tab.addEventListener("click", () => {
+    document.querySelectorAll("[role='tab']").forEach((t) => t.setAttribute("aria-selected", t === tab ? "true" : "false"));
+    setTimeout(() => { current = tab.getAttribute("data-test"); scroller.scrollTop = 0; render(); }, 600);
+  }));
+  render();
+  scroller.scrollTop = 600; render(); // user was scrolled down a bit
+  setTimeout(() => history.pushState({}, "", "/classes/all/list"), 300); // late client-side route
+})();
+</script>
+</body>
+</html>

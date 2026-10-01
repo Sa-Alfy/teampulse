@@ -520,6 +520,38 @@ async function main() {
     await ctx.close();
   });
 
+  // Live failures 2026-10-01: wrong class (path was "/" at load), only the
+  // rendered cards captured (virtualized list), past-due cards as Upcoming.
+  await runTest("virtualized all-classes list: every card, right class, Past due, past dates, tab restored", async () => {
+    const ctx  = await browser.newContext({ timezoneId: "UTC" });
+    const page = await ctx.newPage();
+    await page.clock.setFixedTime(new Date("2026-10-01T10:00:00Z"));
+    await page.route("https://assignments.test/**", (route) => route.fulfill({
+      contentType: "text/html",
+      body: require("fs").readFileSync(path.join(FIXTURE_DIR, "assignments-virtual.html"), "utf8"),
+    }));
+    await page.addInitScript({ content: CHROME_STUB_ASSIGNMENTS });
+    await page.goto("https://assignments.test/?isTeamsFrame=true");
+    await page.addScriptTag({ path: path.join(SCRIPT_DIR, "assignments-frame.js") });
+
+    const m = (await waitAssignMsgs(page, 1, 60000)).find((x) => x.type === "TP_ASSIGNMENTS");
+    assert.ok(m, "no TP_ASSIGNMENTS");
+    assert.strictEqual(m.scope, "all-classes");
+    const past = await page.evaluate(() => window.__PAST);
+    assert.strictEqual(m.assignments.length, past.length, `captured ${m.assignments.length} of ${past.length}`);
+    for (const exp of past) {
+      const a = m.assignments.find((x) => x.title === exp.title);
+      assert.ok(a, `missing ${exp.title}`);
+      assert.strictEqual(a.tab, "Past due", `${exp.title} tab`);
+      assert.strictEqual(a.className, exp.cls, `${exp.title} class`);
+      assert.strictEqual(a.dueDate, exp.iso, `${exp.title} date`);
+    }
+    await page.waitForTimeout(800); // restore click + the fixture's swap delay
+    assert.strictEqual(await page.evaluate(() => document.querySelector('[data-test="Past due"]').getAttribute("aria-selected")),
+      "true", "original tab restored");
+    await ctx.close();
+  });
+
   // ── Summary ────────────────────────────────────────────────────────────
 
   console.log(`\n${"─".repeat(46)}`);

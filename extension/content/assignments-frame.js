@@ -130,6 +130,52 @@ function extractGuid(rawId) {
  * @returns {object[]}
  */
 const EMPTY_TAB_WAIT_MS = 4_000;
+const SCROLL_SETTLE_MS  = 400;
+const MAX_SCROLL_STEPS  = 120;
+
+/** Nearest scrollable ancestor of the assignment list (or the page). */
+function scrollContainer() {
+  const list = document.querySelector('[data-test="assignment-list"]') ||
+               document.querySelector('[data-test="assignment-card"]');
+  for (let el = list; el && el !== document.body; el = el.parentElement) {
+    const oy = getComputedStyle(el).overflowY;
+    if ((oy === "auto" || oy === "scroll") && el.scrollHeight > el.clientHeight + 10) return el;
+  }
+  const page = document.scrollingElement;
+  return page && page.scrollHeight > page.clientHeight + 10 ? page : null;
+}
+
+/**
+ * The list is virtualized: only cards near the viewport exist in the DOM
+ * (live: 13 of many past-due cards captured). Scroll through it, collecting
+ * as we go, then put the scroll position back.
+ */
+async function collectAllCards(tabName) {
+  const byKey = new Map();
+  const grab = () => {
+    for (const c of extractCards(tabName)) {
+      const k = c.assignmentId || c.rawId || `${c.title}|${c.dueRaw}`;
+      if (!byKey.has(k)) byKey.set(k, c);
+    }
+  };
+  grab();
+  const sc = scrollContainer();
+  if (!sc) return [...byKey.values()];
+
+  const start = sc.scrollTop;
+  sc.scrollTop = 0;
+  await new Promise((r) => setTimeout(r, SCROLL_SETTLE_MS));
+  grab();
+  for (let i = 0; i < MAX_SCROLL_STEPS; i++) {
+    const atBottom = sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 2;
+    if (atBottom) break;
+    sc.scrollTop += Math.max(100, Math.floor(sc.clientHeight * 0.8));
+    await new Promise((r) => setTimeout(r, SCROLL_SETTLE_MS));
+    grab();
+  }
+  sc.scrollTop = start;
+  return [...byKey.values()];
+}
 
 function visibleCards() {
   return Array.from(document.querySelectorAll('[data-test="assignment-card"]'))
@@ -162,7 +208,13 @@ function extractCards(tabName) {
     const desc   = descEl   ? (descEl.textContent   || "").trim() : "";
     const action = actionEl ? (actionEl.textContent || "").trim() : "";
     const allUp  = allUpParts(card, title);
-    const groupDate = groupHeaderDate(card);
+    const { date: groupDate, relative } = groupHeader(card);
+
+    // The header's relative text says which side of today the date is on.
+    // It also catches stale cards: a "… ago" card is never Upcoming, and a
+    // "Due in …" card is never Past due (live: past-due cards read as Upcoming).
+    if (tabName === "Upcoming" && /\bago\b/i.test(relative)) continue;
+    if (tabName === "Past due" && /\bdue in\b/i.test(relative)) continue;
 
     const rawId    = card.getAttribute("id")      || null;
     const dataId   = card.getAttribute("data-id") || null;
@@ -179,7 +231,7 @@ function extractCards(tabName) {
     // Grouped lists put the date in the group header ("Aug 31st") and only the
     // time on the card ("Due at 11:59 PM"); combine them. dueDate is ISO so
     // the shape layer uses it as-is and reads the time from dueRaw.
-    const dueDate = !dueRaw && groupDate ? inferDueDate(groupDate, tabName, new Date()) : null;
+    const dueDate = !dueRaw && groupDate ? inferDueDate(groupDate, tabName, new Date(), relative) : null;
     const rawText = [groupDate, allUp.dueText].filter(Boolean).join(" ");
 
     const item = {
@@ -195,7 +247,7 @@ function extractCards(tabName) {
       status:       action,
     };
     // All-classes view: each card names its own class.
-    if (IS_ALL_CLASSES_VIEW && allUp.className) item.className = allUp.className;
+    if (allUp.className && isAllClassesView()) item.className = allUp.className;
     results.push(item);
   }
 
@@ -211,7 +263,14 @@ function extractCards(tabName) {
 //            div[role="presentation"] "Summer_2026_CSE 312 (V1)_ 232_D4"
 
 const ALL_UP_TITLE_SEL    = '[data-test="assignment-card-title-all-up-view"]';
-const IS_ALL_CLASSES_VIEW = /^\/classes\/all\//.test(location.pathname);
+/**
+ * Checked at capture time, not at load: the app first loads at "/" and routes
+ * to /classes/all/list afterwards (live: everything was filed under the tab's
+ * last class). The all-up title element only exists in the all-classes view.
+ */
+function isAllClassesView() {
+  return /^\/classes\/all\//.test(location.pathname) || !!document.querySelector(ALL_UP_TITLE_SEL);
+}
 const MONTHS_IDX = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
 
 function ownText(el) {
@@ -225,20 +284,25 @@ function allUpParts(card, title) {
   let className = "";
   for (const el of card.querySelectorAll('[role="presentation"]')) {
     const t = ownText(el);
-    if (!t || t === title) continue;
-    if (/^due\b/i.test(t)) { if (!dueText) dueText = t; }
-    else className = t; // the last non-"Due" line is the class name
+    if (!t || t === title || /^\d+(\.\d+)?\s+points?$/i.test(t)) continue;
+    if (/^due\b/i.test(t)) { if (!dueText) dueText = t; continue; }
+    if (dueText && !className) className = t; // the line right after "Due at …"
   }
   return { dueText, className };
 }
 
-/** Date text of the card's group header, e.g. "Aug 31st". */
-function groupHeaderDate(card) {
+/**
+ * The card's group header: date ("Aug 31st", "Dec 29, 2025") and the
+ * relative part ("Due a month ago" / "Due in 3 days").
+ */
+function groupHeader(card) {
   const group  = card.closest('[role="group"]');
   const header = group && group.querySelector('[id^="groupHeader_"]');
-  if (!header) return "";
+  if (!header) return { date: "", relative: "" };
+  const norm = (s) => (s || "").replace(/[\s ]+/g, " ").trim();
   const span = header.querySelector("span");
-  return ((span ? span.textContent : header.textContent) || "").replace(/[\s ]+/g, " ").trim();
+  const date = norm(span ? span.textContent : header.textContent);
+  return { date, relative: norm(header.textContent).slice(date.length).trim() };
 }
 
 /**
@@ -246,7 +310,10 @@ function groupHeaderDate(card) {
  * Without a year: Upcoming → next occurrence; Past due / Completed → most
  * recent past occurrence. Returns null if the text isn't a date.
  */
-function inferDueDate(text, tabName, now) {
+function inferDueDate(text, tabName, now, relative = "") {
+  // "Due 7 months ago" → past; "Due in 3 days" → future; otherwise by tab.
+  if (/\bago\b/i.test(relative)) tabName = "Past due";
+  else if (/\bdue in\b/i.test(relative)) tabName = "Upcoming";
   const pad = (n) => String(n).padStart(2, "0");
   const fmt = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -336,7 +403,7 @@ async function scrape() {
     await new Promise((r) => setTimeout(r, SETTLE_MS));
 
     // 3. Extract cards (an assignment is recorded once, under its first tab).
-    for (const c of extractCards(tabName)) {
+    for (const c of await collectAllCards(tabName)) {
       const id = c.assignmentId || c.rawId;
       if (id && seenIds.has(id)) continue;
       if (id) seenIds.add(id);
@@ -354,7 +421,7 @@ async function scrape() {
   sendAssignments({
     type: "TP_ASSIGNMENTS",
     assignments,
-    scope: IS_ALL_CLASSES_VIEW ? "all-classes" : "class",
+    scope: isAllClassesView() ? "all-classes" : "class",
     scrapedAt: new Date().toISOString(),
   }, 2);
 }
