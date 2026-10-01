@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Assignments All-Classes Fixture</title>
+</head>
+<body>
+<!--
+  All-classes (left-bar Assignments app, /classes/all/list) grouped list,
+  shaped from tools/dom-probe-assignments.js output (2026-10-01): the date is in
+  the group header, the card has only "Due at …" and the class name.
+  DISCLAIMER: proves logic only, not compatibility with the live DOM.
+-->
+<div role="tablist">
+  <button data-test="Upcoming"  role="tab" id="tab-Upcoming"  aria-selected="false">Upcoming</button>
+  <button data-test="Past due"  role="tab" id="tab-Past-due"  aria-selected="true">Past due</button>
+  <button data-test="Completed" role="tab" id="tab-Completed" aria-selected="false">Completed</button>
+</div>
+
+<div id="panel-upcoming" style="display:none">
+  <div role="list" data-test="assignment-list"><div role="presentation">
+    <div role="group">
+      <div role="presentation"><div role="presentation" id="groupHeader_0"><span>Dec 30th</span><span>Due in 3 months</span></div></div>
+      <div role="presentation"><div role="presentation"><div role="presentation">
+        <div role="listitem" data-test="assignment-card" id="aaaa1111-2222-4333-8444-555566667777" class="fui-Card">
+          <span data-test="assignment-card-title-all-up-view">Final Project</span>
+          <div role="presentation">Due at 9:00 AM</div>
+          <div role="presentation">MAT 103 D1; Summer 2026</div>
+        </div>
+      </div></div></div>
+    </div>
+  </div></div>
+</div>
+
+<div id="panel-pastdue">
+  <div role="list" data-test="assignment-list"><div role="presentation">
+    <div role="group">
+      <div role="presentation"><div role="presentation" id="groupHeader_0"><span>Aug 31st</span><span>Due a month ago</span></div></div>
+      <div role="presentation"><div role="presentation"><div role="presentation">
+        <div role="listitem" data-test="assignment-card" id="f0ca5381-5776-4eb2-8e66-51e4ff66088b" class="fui-Card">
+          <span data-test="assignment-card-title-all-up-view">Project Submission</span>
+          <div role="presentation">Due at 11:59 PM</div>
+          <div role="presentation">Summer_2026_CSE 312 (V1)_ 232_D4</div>
+        </div>
+      </div></div></div>
+    </div>
+    <div role="group">
+      <div role="presentation"><div role="presentation" id="groupHeader_1"><span>Aug 13th</span><span>Due 2 months ago</span></div></div>
+      <div role="presentation"><div role="presentation"><div role="presentation">
+        <div role="listitem" data-test="assignment-card" id="1cdc85ff-e38b-4d3c-84b8-63290776244c" class="fui-Card">
+          <span data-test="assignment-card-title-all-up-view">CLP-02</span>
+          <div role="presentation">Due at 12:14 PM</div>
+          <div role="presentation">Summer_2026_CSE 304 (V1)_242_D1</div>
+        </div>
+      </div></div></div>
+    </div>
+  </div></div>
+</div>
+
+<div id="panel-completed" style="display:none">
+  <div role="list" data-test="assignment-list"><div role="presentation">
+    <div role="group">
+      <div role="presentation"><div role="presentation" id="groupHeader_0"><span>Jul 24th</span><span>Due 2 months ago</span></div></div>
+      <div role="presentation"><div role="presentation"><div role="presentation">
+        <div role="listitem" data-test="assignment-card" id="c730b85a-de5b-441d-a7a2-ae2f670529f7" class="fui-Card">
+          <span data-test="assignment-card-title-all-up-view">Project Proposal</span>
+          <div role="presentation">Due at 11:59 PM</div>
+          <div role="presentation">Summer_2026_CSE 312 (V1)_ 232_D4</div>
+        </div>
+      </div></div></div>
+    </div>
+  </div></div>
+</div>
+
+<script>
+(() => {
+  const panels = { "Upcoming": "panel-upcoming", "Past due": "panel-pastdue", "Completed": "panel-completed" };
+  const tabs = document.querySelectorAll("[role='tab']");
+  tabs.forEach((tab) => tab.addEventListener("click", () => {
+    const name = tab.getAttribute("data-test");
+    tabs.forEach((t) => t.setAttribute("aria-selected", t === tab ? "true" : "false"));
+    for (const [k, id] of Object.entries(panels)) document.getElementById(id).style.display = k === name ? "" : "none";
+  }));
+})();
+</script>
+</body>
+</html>

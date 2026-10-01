@@ -138,13 +138,16 @@ function extractCards(tabName) {
   const results = [];
 
   for (const card of targetCards) {
-    const titleEl  = card.querySelector(".fui-CardHeader__header");
+    const titleEl  = card.querySelector(".fui-CardHeader__header") ||
+                     card.querySelector(ALL_UP_TITLE_SEL);
     const descEl   = card.querySelector(".fui-CardHeader__description");
     const actionEl = card.querySelector(".fui-CardHeader__action");
 
     const title  = titleEl  ? (titleEl.textContent  || "").trim() : "";
     const desc   = descEl   ? (descEl.textContent   || "").trim() : "";
     const action = actionEl ? (actionEl.textContent || "").trim() : "";
+    const allUp  = allUpParts(card, title);
+    const groupDate = groupHeaderDate(card);
 
     const rawId    = card.getAttribute("id")      || null;
     const dataId   = card.getAttribute("data-id") || null;
@@ -158,19 +161,96 @@ function extractCards(tabName) {
          dueEl.getAttribute("aria-label") || null)
       : null;
 
-    results.push({
+    // Grouped lists put the date in the group header ("Aug 31st") and only the
+    // time on the card ("Due at 11:59 PM"); combine them. dueDate is ISO so
+    // the shape layer uses it as-is and reads the time from dueRaw.
+    const dueDate = !dueRaw && groupDate ? inferDueDate(groupDate, tabName, new Date()) : null;
+    const rawText = [groupDate, allUp.dueText].filter(Boolean).join(" ");
+
+    const item = {
       tab:          tabName,
       assignmentId,
       rawId,
       title,
       details:      desc,
-      dueRaw:       dueRaw || null,
-      dueDate:      null,   // resolved by shape layer (needs extractDate)
+      dueRaw:       dueRaw || rawText || null,
+      dueDate,      // null → resolved by shape layer (extractDate)
       status:       action,
-    });
+    };
+    // All-classes view: each card names its own class.
+    if (IS_ALL_CLASSES_VIEW && allUp.className) item.className = allUp.className;
+    results.push(item);
   }
 
   return results;
+}
+
+// ── Grouped / all-classes list (shape from tools/dom-probe-assignments.js) ─
+//   [data-test="assignment-list"] > … > [role="group"]
+//       [id^="groupHeader_"] > span "Aug 31st"  + "Due a month ago"
+//       … [data-test="assignment-card"]
+//            span[data-test="assignment-card-title-all-up-view"]  title
+//            div[role="presentation"] "Due at 11:59 PM"
+//            div[role="presentation"] "Summer_2026_CSE 312 (V1)_ 232_D4"
+
+const ALL_UP_TITLE_SEL    = '[data-test="assignment-card-title-all-up-view"]';
+const IS_ALL_CLASSES_VIEW = /^\/classes\/all\//.test(location.pathname);
+const MONTHS_IDX = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+
+function ownText(el) {
+  return Array.from(el.childNodes).filter((n) => n.nodeType === 3)
+    .map((n) => n.textContent).join(" ").replace(/[\s ]+/g, " ").trim();
+}
+
+/** "Due at …" text and the class-name line of an all-up card. */
+function allUpParts(card, title) {
+  let dueText = "";
+  let className = "";
+  for (const el of card.querySelectorAll('[role="presentation"]')) {
+    const t = ownText(el);
+    if (!t || t === title) continue;
+    if (/^due\b/i.test(t)) { if (!dueText) dueText = t; }
+    else className = t; // the last non-"Due" line is the class name
+  }
+  return { dueText, className };
+}
+
+/** Date text of the card's group header, e.g. "Aug 31st". */
+function groupHeaderDate(card) {
+  const group  = card.closest('[role="group"]');
+  const header = group && group.querySelector('[id^="groupHeader_"]');
+  if (!header) return "";
+  const span = header.querySelector("span");
+  return ((span ? span.textContent : header.textContent) || "").replace(/[\s ]+/g, " ").trim();
+}
+
+/**
+ * "Aug 31st" (+ optional year) / Today / Tomorrow / Yesterday → "YYYY-MM-DD".
+ * Without a year: Upcoming → next occurrence; Past due / Completed → most
+ * recent past occurrence. Returns null if the text isn't a date.
+ */
+function inferDueDate(text, tabName, now) {
+  const pad = (n) => String(n).padStart(2, "0");
+  const fmt = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const rel = { today: 0, tomorrow: 1, yesterday: -1 }[text.trim().toLowerCase()];
+  if (rel !== undefined) return fmt(new Date(today.getFullYear(), today.getMonth(), today.getDate() + rel));
+
+  const m = text.match(/^([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(\d{4}))?/);
+  if (!m) return null;
+  const month = MONTHS_IDX[m[1].toLowerCase()];
+  const day = parseInt(m[2], 10);
+  if (month === undefined) return null;
+
+  let year = m[3] ? parseInt(m[3], 10) : today.getFullYear();
+  let d = new Date(year, month, day);
+  if (d.getMonth() !== month) return null; // e.g. Feb 30
+  if (!m[3]) {
+    const DAY = 864e5;
+    if (tabName === "Upcoming" && d < today - DAY) d = new Date(++year, month, day);
+    else if (tabName !== "Upcoming" && d > +today + DAY) d = new Date(--year, month, day);
+  }
+  return fmt(d);
 }
 
 // ── Throttle state ─────────────────────────────────────────────────────────
@@ -231,7 +311,12 @@ async function scrape() {
   }
 
   // Send regardless of whether assignments is empty (the background validates).
-  sendAssignments({ type: "TP_ASSIGNMENTS", assignments, scrapedAt: new Date().toISOString() }, 2);
+  sendAssignments({
+    type: "TP_ASSIGNMENTS",
+    assignments,
+    scope: IS_ALL_CLASSES_VIEW ? "all-classes" : "class",
+    scrapedAt: new Date().toISOString(),
+  }, 2);
 }
 
 /**

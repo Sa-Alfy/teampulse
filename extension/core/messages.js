@@ -185,6 +185,30 @@ async function handleMessage(msg, sender, deps) {
       }
     }
 
+    // All-classes view (left-bar Assignments app): every card names its own
+    // class, so file each one there instead of under the tab's last class.
+    // The list covers all classes and all three tabs, so it is authoritative:
+    // known classes absent from a non-empty batch have no assignments.
+    if (msg.scope === "all-classes") {
+      const byClass = {};
+      for (const a of assignments) {
+        if (typeof a.className !== "string" || a.className.length === 0) {
+          return reject("all-classes assignments must carry className");
+        }
+        if (a.className.length > MAX_CLASS_NAME) {
+          return reject(`className exceeds ${MAX_CLASS_NAME} chars`);
+        }
+        (byClass[a.className] = byClass[a.className] || []).push(a);
+      }
+      if (assignments.length === 0) return ok(); // nothing rendered — don't wipe
+      const now = nowIso();
+      const known = Object.keys((await store.getState()).classes || {});
+      for (const cn of new Set([...known, ...Object.keys(byClass)])) {
+        await store.ingestAssignments(cn, byClass[cn] || [], now);
+      }
+      return ok();
+    }
+
     // Join to className from tab context
     const className = await session.get(tabCtxKey(tabId));
     if (!className) {

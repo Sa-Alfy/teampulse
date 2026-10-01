@@ -462,6 +462,40 @@ async function main() {
 
   await require("./popup-xss.test.js").run(browser, runTest);
 
+  // (all-classes) Grouped list at /classes/all/list → dates from group headers,
+  // class from each card, scope "all-classes". Served at a fake https URL so
+  // location.pathname matches the real view.
+  await runTest("all-classes view: date from group header + time, class per card, scope all-classes", async () => {
+    const ctx  = await browser.newContext({ timezoneId: "UTC" });
+    const page = await ctx.newPage();
+    await page.clock.setFixedTime(new Date("2026-10-01T10:00:00Z"));
+    await page.route("https://assignments.test/**", (route) => route.fulfill({
+      contentType: "text/html",
+      body: require("fs").readFileSync(path.join(FIXTURE_DIR, "assignments-all.html"), "utf8"),
+    }));
+    await page.addInitScript({ content: CHROME_STUB_ASSIGNMENTS });
+    await page.goto("https://assignments.test/classes/all/list");
+    await page.addScriptTag({ path: path.join(SCRIPT_DIR, "assignments-frame.js") });
+
+    const msgs = await waitAssignMsgs(page, 1, 20000);
+    const m = msgs.find((x) => x.type === "TP_ASSIGNMENTS");
+    assert.ok(m, "no TP_ASSIGNMENTS");
+    assert.strictEqual(m.scope, "all-classes");
+    assert.strictEqual(m.assignments.length, 4, `expected 4 cards, no duplicates: ${m.assignments.map((a) => a.title)}`);
+    const by = Object.fromEntries(m.assignments.map((a) => [a.title, a]));
+    assert.deepStrictEqual(Object.keys(by).sort(), ["CLP-02", "Final Project", "Project Proposal", "Project Submission"]);
+    assert.strictEqual(by["Project Proposal"].tab, "Completed");
+    assert.strictEqual(by["Project Proposal"].dueDate, "2026-07-24", "Completed → most recent past");
+
+    assert.strictEqual(by["Project Submission"].dueDate, "2026-08-31", "Past due → this year (already passed)");
+    assert.strictEqual(by["Project Submission"].className, "Summer_2026_CSE 312 (V1)_ 232_D4");
+    assert.match(by["Project Submission"].dueRaw, /Aug 31st Due at 11:59 PM/);
+    assert.strictEqual(by["CLP-02"].className, "Summer_2026_CSE 304 (V1)_242_D1");
+    assert.strictEqual(by["Final Project"].dueDate, "2026-12-30", "Upcoming → next occurrence");
+    assert.strictEqual(by["Final Project"].tab, "Upcoming");
+    await ctx.close();
+  });
+
   // ── Summary ────────────────────────────────────────────────────────────
 
   console.log(`\n${"─".repeat(46)}`);

@@ -299,3 +299,48 @@ test("messages: missing sender tab or missing type rejected", async () => {
   );
   assert.strictEqual(r3.ok, false);
 });
+
+// ── All-classes view (left-bar Assignments app) ─────────────────────────────
+
+test("messages: all-classes TP_ASSIGNMENTS files each card under its own class and clears stale ones", async () => {
+  const store   = makeStore();
+  const session = makeSession();
+  const deps    = makeDeps({ store, session });
+  const A = "Summer_2026_CSE 312 (V1)_ 232_D4";
+  const B = "MAT 103 D1; Summer 2026";
+  const STALE = "Summer_2026_CSE 303 (V1)_242_D4";
+
+  // Earlier bug: all cards were filed under the tab's last class.
+  await store.ingestAssignments(STALE, [{ tab: "Past due", title: "wrongly filed" }], "2026-10-01T00:00:00Z");
+  await handleMessage({ type: "TP_CLASS_CONTEXT", className: STALE }, teamsSender(3), deps);
+
+  const res = await handleMessage({
+    type: "TP_ASSIGNMENTS",
+    scope: "all-classes",
+    assignments: [
+      { tab: "Past due", title: "Project Submission", className: A, dueDate: "2026-08-31", dueRaw: "Aug 31st Due at 11:59 PM" },
+      { tab: "Past due", title: "CLP-03",             className: A, dueDate: "2026-08-28", dueRaw: "Aug 28th Due at 11:59 PM" },
+      { tab: "Upcoming", title: "Problem set",        className: B, dueDate: "2026-10-05", dueRaw: "Oct 5th Due at 9:00 AM" },
+    ],
+  }, assignSender(3), deps);
+  assert.strictEqual(res.ok, true, res.reason);
+
+  const st = await store.getState();
+  assert.deepStrictEqual(st.classes[A].assignments.map((a) => a.title), ["Project Submission", "CLP-03"]);
+  assert.deepStrictEqual(st.classes[B].assignments.map((a) => a.title), ["Problem set"]);
+  assert.deepStrictEqual(st.classes[STALE].assignments, [], "stale, wrongly filed list cleared");
+});
+
+test("messages: all-classes batch without className rejected; empty batch wipes nothing", async () => {
+  const store = makeStore();
+  const deps  = makeDeps({ store, session: makeSession() });
+  await store.ingestAssignments("X", [{ tab: "Upcoming", title: "keep" }], "2026-10-01T00:00:00Z");
+
+  const bad = await handleMessage({ type: "TP_ASSIGNMENTS", scope: "all-classes",
+    assignments: [{ tab: "Upcoming", title: "no class" }] }, assignSender(4), deps);
+  assert.strictEqual(bad.ok, false);
+
+  const empty = await handleMessage({ type: "TP_ASSIGNMENTS", scope: "all-classes", assignments: [] }, assignSender(4), deps);
+  assert.strictEqual(empty.ok, true);
+  assert.strictEqual((await store.getState()).classes.X.assignments.length, 1, "empty batch must not wipe");
+});
