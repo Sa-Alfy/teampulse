@@ -15,6 +15,7 @@
     "server": "node server.js",
     "test": "node --test",
     "test:dom": "node test-dom/runner.js",
+    "test:e2e": "node test-dom/extension-e2e.js",
     "start": "node teams.js"
   },
   "keywords": [
