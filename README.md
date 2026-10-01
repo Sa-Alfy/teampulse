@@ -3,7 +3,7 @@
 > **Turn chaotic Microsoft Teams courses into a clean, automated academic briefing.**  
 > Scrapes classes, tracks assignments, extracts Class Test (CT) dates, and delivers a unified daily digest — showing only what's **new since the last run**.
 > 
-> **Status (2026-10-01, [v0.6.0 pre-release](https://github.com/Sa-Alfy/teampulse/releases/tag/v0.6.0)):** the browser extension works on its own — no server, no Node.js. Live capture of channel posts has been seen working on `teams.cloud.microsoft` for one student account. Assignment capture and "Sync all classes" are **unverified on real Teams** (tested only against local mock pages). Not on the Chrome Web Store.
+> **Status (2026-10-01, [v0.6.1 pre-release](https://github.com/Sa-Alfy/teampulse/releases/tag/v0.6.1)):** the browser extension works on its own — no server, no Node.js. Live capture of channel posts and "Sync all classes" have been confirmed working on `teams.cloud.microsoft` by the owner (one student account). Assignment capture is **unverified on real Teams** (tested only against local mock pages). Not on the Chrome Web Store.
 
 ---
 
@@ -80,7 +80,7 @@ Both paths share the same parsing rules (`extension/core/digest-utils.js`) and p
 - [x] **Storage & Deduplication**: SQLite (`teamspulse.db`) stores a SHA-256 fingerprint for every processed post. On the next run, already-seen posts are silently skipped — only genuinely new content appears in the digest.
 - [x] **Resilient UI Selectors**: Bypasses unstable Fluent UI atomic class names by anchoring to semantic `data-testid` / `data-test` / ARIA attributes.
 - [x] **Standalone Chrome / Edge extension**: popup reads `chrome.storage.local` — no server or Node.js. Live-updates as you browse Teams; toolbar badge counts new posts (24 h window).
-- [x] **Sync all classes**: one click opens each class in your Teams tab, captures it, and returns you where you were (hidden teams skipped). *Not yet tested on live Teams.*
+- [x] **Sync all classes**: one click opens each class in your Teams tab, captures it, and returns you where you were (hidden teams skipped). Confirmed on live Teams by the owner (2026-10-01).
 - [x] **Scraper health**: if Teams changes its page and capture stops working, the popup says "Scraper may be out of date" instead of quietly showing old data.
 - [x] **Clear stored data**: one button wipes everything the extension stored.
 - [x] **Export assignments (.ics)**: download a calendar file of dated assignments, generated on your device (`extension/core/ics.js`); import it into Google Calendar, Outlook or Apple Calendar. Re-importing updates events instead of duplicating them.
@@ -274,7 +274,8 @@ surfaced posts count as seen, so loosening the classifier later can still recove
 - [x] Popup and badge read `chrome.storage.local`; no localhost, no host permissions, strict CSP
 - [x] Scraper-health warning, Clear stored data, Sync all classes
 - [x] Tests: 84 unit (`npm test`, incl. a golden parity test that runs the real `server.js`), 16 Playwright DOM tests (`npm run test:dom`), 4 end-to-end tests with the real unpacked extension loaded (`npm run test:e2e`) — all against mocks, not live Teams
-- [ ] Verify on live Teams: assignments capture, Sync all classes, "All teams" back navigation
+- [x] Verified on live Teams by the owner: post capture, Sync all classes
+- [ ] Verify on live Teams: assignments capture
 
 ### 🔲 Phase 5: Distribution
 - [x] `npm run pack:extension` → store-ready zip; [`PRIVACY.md`](PRIVACY.md); [store listing draft](docs/store-listing.md)

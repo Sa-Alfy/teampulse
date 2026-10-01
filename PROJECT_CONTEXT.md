@@ -171,7 +171,8 @@ Selectors from `tools/dom-probe-teams-list.js`: grid `[data-tid="teams-grid-view
 
 ### Verification status (2026-10-01)
 - **Verified live**: post capture and class detection on `teams.cloud.microsoft` (2 classes, one account); service worker registration after the `_store` fix.
-- **Not verified live**: assignments capture, Sync all classes, "All teams" back navigation, health warnings, other locales/layouts.
+- **Verified live by the owner (2026-10-01)**: Sync all classes, including returning to the classes grid between classes (which back control fired — "All teams" text or the app-bar fallback — was not observed).
+- **Not verified live**: assignments capture, health warnings, .ics import into calendar apps, other locales/layouts.
 - **Verified against mocks**: server parity (`test/server-parity.test.js`), real unpacked extension end-to-end (`test-dom/extension-e2e.js`).
 
 ### Release & packaging (Implemented)
