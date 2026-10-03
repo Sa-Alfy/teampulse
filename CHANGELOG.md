@@ -1,13 +1,15 @@
 # Changelog
 
-## 0.7.2 (2026-10-03, pre-release): assignments sync stuck on Upcoming, card jump stuck behind it
+## 0.7.2 (2026-10-03, release): assignments sync stuck on Upcoming, card jump stuck behind it
+
+**Confirmed on live Teams by the owner (2026-10-03, one student account):** Sync no longer stalls on the empty Upcoming tab, and clicking an assignment card opens it in Teams. Promoted from pre-release to full release. Still unverified on live Teams: scrolling up to find older posts (0.7.1).
 
 Reported by the owner on live Teams (0.7.1, 2026-10-03, with a screenshot): after a sync or a card click, the Assignments app sat on an empty Upcoming tab. Clicking Past due by hand got it moving.
 
 - **Fixed: empty Upcoming not recognised.** The all-classes view says "No upcoming assignments right now.", but the empty-state check only knew "No assignments". Upcoming waited the full 20 s and was reported as a timeout, which made the capture partial. The check now accepts "No <up to 3 words> assignments" when it starts a text node, such as "No upcoming / past due / completed assignments". It still rejects other text, such as an assignment title containing "no late assignments". New matrix case uses the exact live wording.
 - **Fixed: card jump waited behind the capture.** Showing the Assignments app starts a capture that can take a minute or more. The jump only ran afterwards and gave up after 2 minutes, leaving the restored Upcoming tab. A pending jump now runs first and the capture follows.
 - The Teams tab now forwards assignment jumps to the frame as `tp:nav:task`. The frame no longer reads the popup command directly, so a click made during a sync can't move the Assignments list mid-capture.
-- Tests: `node --test` 103 pass; `npm run test:dom` 47/47 (2 new); `npm run test:e2e` 5/5. **Not verified on real Teams yet.**
+- Tests: `node --test` 103 pass; `npm run test:dom` 47/47 (2 new); `npm run test:e2e` 5/5. Live confirmation: see above.
 
 ## 0.7.1 (2026-10-03, pre-release): open any card in Teams
 
