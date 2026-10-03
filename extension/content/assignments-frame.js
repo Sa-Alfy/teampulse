@@ -36,7 +36,11 @@ const WAIT_TIMEOUT_MS = 10_000;
 const TAB_SELECT_MS   = 8_000;
 const CHANGE_WAIT_MS  = 15_000;   // previous tab's list replaced
 const SETTLE_MS       = 400;      // brief settle after tab becomes active
-const EMPTY_RE        = /\bno assignments\b/i; // empty-state text (seen live)
+// Empty-state text, matched against a whole text node so a card title can't
+// trigger it. Seen live: "No assignments" (class view) and, in the all-classes
+// view, "No upcoming assignments right now." (owner's screenshot 2026-10-03;
+// before 0.7.2 that one went unrecognised and Upcoming waited 20 s).
+const EMPTY_RE        = /^\s*no\s+(?:[a-z'-]+\s+){0,3}assignments\b/i;
 const MAX_SEND        = 300;      // = messages.js MAX_ASSIGNMENTS
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -461,7 +465,8 @@ let _deferTimer = null;
  */
 function requestScrape(trigger) {
   if (_running) return;
-  if (_navBusy) { setTimeout(() => requestScrape(trigger), 3000); return; } // jumping to a card
+  // A card jump goes first; the capture follows it.
+  if (_navBusy || (navWaiting() && documentRendered())) { setTimeout(() => requestScrape(trigger), 3000); return; }
   const wait = COOLDOWN_MS - (Date.now() - _lastRunMs);
   if (_lastRunMs && wait > 0) {
     if (!_deferTimer) _deferTimer = setTimeout(() => { _deferTimer = null; requestScrape(`${trigger}+cooldown`); }, wait);
@@ -654,13 +659,16 @@ function send(msg, retriesLeft) {
 }
 
 // ── Open in Teams: find one assignment (popup card click) ─────────────────
-// The popup stores { kind: "task", id, at, tab, title, assignmentId,
-// classShort } under tp:nav:cmd; the top frame opens this app. Once no capture
-// is running, select the item's tab, scroll the list until its card shows,
-// then scroll to it and outline it. The card is NOT clicked: opening it would
-// navigate the frame and trigger a capture of a page without a list.
+// The popup stores the command under tp:nav:cmd; the top frame checks it
+// (not while syncing), forwards task commands here as tp:nav:task { id, at,
+// tab, title, assignmentId, classShort } and opens this app. The jump runs
+// BEFORE any capture the newly shown frame would start (captures wait while a
+// jump is pending), so it isn't stuck behind a minute-long capture. Select the
+// item's tab, scroll the list until its card shows, then scroll to it and
+// outline it. The card is NOT clicked: opening it would navigate the frame and
+// trigger a capture of a page without a list.
 
-const NAV_CMD_KEY    = "tp:nav:cmd";
+const NAV_TASK_KEY   = "tp:nav:task";
 const NAV_MAX_AGE_MS = 120_000;
 let _navHandled = null;
 let _navCmd     = null;
@@ -708,10 +716,15 @@ async function navToCard(cmd) {
   return true;
 }
 
+function navWaiting() {
+  const c = _navCmd;
+  return !!c && c.id !== _navHandled && Date.now() - (Number(c.at) || 0) <= NAV_MAX_AGE_MS;
+}
+
 function maybeNav(cmd) {
   if (cmd) _navCmd = cmd;
   const c = _navCmd;
-  if (!c || c.kind !== "task" || c.id === _navHandled || Date.now() - (Number(c.at) || 0) > NAV_MAX_AGE_MS) return;
+  if (!navWaiting()) return;
   if (_running || !documentRendered()) return; // retried after the capture / when shown
   _navHandled = c.id;
   _navCmd = null;
@@ -733,11 +746,11 @@ if (typeof module === "undefined") {
     else if (rendered && !wasRendered) requestScrape(why);
     wasRendered = rendered;
   };
-  setInterval(() => { recheck("frame-shown"); maybeNav(); }, 2000);
+  setInterval(() => { maybeNav(); recheck("frame-shown"); }, 2000);
   try {
-    chrome.storage.local.get([NAV_CMD_KEY], (res) => maybeNav(res && res[NAV_CMD_KEY]));
+    chrome.storage.local.get([NAV_TASK_KEY], (res) => maybeNav(res && res[NAV_TASK_KEY]));
     chrome.storage.onChanged.addListener((changes, area) => {
-      if (area === "local" && changes[NAV_CMD_KEY] && changes[NAV_CMD_KEY].newValue) maybeNav(changes[NAV_CMD_KEY].newValue);
+      if (area === "local" && changes[NAV_TASK_KEY] && changes[NAV_TASK_KEY].newValue) maybeNav(changes[NAV_TASK_KEY].newValue);
     });
   } catch (_) { /* storage unavailable (tests / context gone) */ }
   window.addEventListener("resize", () => recheck("frame-shown"));

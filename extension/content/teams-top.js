@@ -531,9 +531,12 @@
   // reading the capture uses — so no extra selectors are involved.
   //   kind "post": open the class like Sync does, find the post by its
   //                timestamp + subject/body start, scroll to it, outline it.
-  //   kind "task": open the Assignments app; its frame script finds the card.
+  //   kind "task": forward it as NAV_TASK_KEY (so the frame never acts on a
+  //                command this tab rejected, e.g. mid-sync), then open the
+  //                Assignments app; its frame script finds the card.
 
   const NAV_CMD_KEY     = "tp:nav:cmd";
+  const NAV_TASK_KEY    = "tp:nav:task";
   const NAV_MAX_AGE_MS  = 120_000;
   const NAV_LOAD_OLDER  = 8;       // scroll-to-top rounds to load older posts
   const NAV_OLDER_WAIT  = 1_200;
@@ -620,12 +623,16 @@
     flash(msg);
   }
 
-  async function navigateToTask() {
+  async function navigateToTask(cmd) {
     const btn = assignmentsAppButton();
     if (!btn) {
       navToast("couldn't find the Assignments app button in Teams.");
       return;
     }
+    await chrome.storage.local.set({ [NAV_TASK_KEY]: {
+      id: cmd.id, at: Date.now(), tab: cmd.tab, title: cmd.title,
+      assignmentId: cmd.assignmentId || null, classShort: cmd.classShort || "",
+    } });
     btn.click(); // the frame script picks the command up and finds the card
   }
 

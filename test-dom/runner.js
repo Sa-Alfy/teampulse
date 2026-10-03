@@ -467,14 +467,40 @@ async function main() {
     await page.goto("file:///" + path.join(FIXTURE_DIR, "assignments.html").replace(/\\/g, "/"));
     await page.addScriptTag({ path: path.join(SCRIPT_DIR, "assignments-frame.js") });
     await waitAssignMsgs(page, 1, 20000); // capture done, Upcoming restored
-    await page.evaluate(() => window.__nav.forEach((l) => l({ "tp:nav:cmd": { newValue: {
-      kind: "task", id: "n1", at: Date.now(), tab: "Past due", title: "HW-3",
+    await page.evaluate(() => window.__nav.forEach((l) => l({ "tp:nav:task": { newValue: {
+      id: "n1", at: Date.now(), tab: "Past due", title: "HW-3",
       assignmentId: "ccdd3456-7890-3456-cdef-012345678901" } } }, "local")));
     await page.waitForFunction(() => {
       const card = document.getElementById("card-pd-1-ccdd3456-7890-3456-cdef-012345678901");
       return card && card.style.outline.includes("solid");
     }, null, { timeout: 10000 });
     assert.strictEqual(await page.evaluate(() => document.querySelector('[data-test="Past due"]').getAttribute("aria-selected")), "true");
+    await ctx.close();
+  });
+
+  // Live 0.7.1 (owner, 2026-10-03): the jump waited behind a capture stuck on
+  // Upcoming. A jump pending when the frame starts now runs first.
+  await runTest("open in Teams: a jump pending at frame load runs before the capture, which still follows", async () => {
+    const ctx  = await browser.newContext();
+    const page = await ctx.newPage();
+    await page.addInitScript({ content: `
+      window.__msgs = []; window.__outlinedAt = 0;
+      const cmd = { id: "n2", at: Date.now(), tab: "Past due", title: "HW-3",
+        assignmentId: "ccdd3456-7890-3456-cdef-012345678901" };
+      window.chrome = {
+        runtime: { id: "test-extension-id", sendMessage: (m) => { window.__msgs.push(JSON.parse(JSON.stringify(m))); } },
+        storage: { local: { get: (keys, cb) => cb({ "tp:nav:task": cmd }) }, onChanged: { addListener: () => {} } },
+      };` });
+    await page.goto("file:///" + path.join(FIXTURE_DIR, "assignments.html").replace(/\\/g, "/"));
+    await page.addScriptTag({ path: path.join(SCRIPT_DIR, "assignments-frame.js") });
+    await page.waitForFunction(() => {
+      const card = document.getElementById("card-pd-1-ccdd3456-7890-3456-cdef-012345678901");
+      return card && card.style.outline.includes("solid");
+    }, null, { timeout: 8000 });
+    const capturedBeforeJump = await page.evaluate(() => window.__msgs.filter((m) => m.type === "TP_ASSIGNMENTS").length);
+    assert.strictEqual(capturedBeforeJump, 0, "capture ran before the jump");
+    const msgs = await waitAssignMsgs(page, 1, 25000);
+    assert.ok(msgs.some((m) => m.type === "TP_ASSIGNMENTS" && m.assignments.length > 0), "capture did not follow the jump");
     await ctx.close();
   });
 
@@ -683,6 +709,11 @@ async function main() {
       assert.strictEqual(r.status, "failed");
       assert.strictEqual(r.reasons, "no-tabs-found");
       assert.strictEqual(r.okTabs, "");
+    }],
+    ["live all-classes wording 'No upcoming assignments right now.' → Upcoming ok, no 20 s stall", "live empty wording (all-classes)", (r) => {
+      clean(r);
+      const up = r.msg.report.tabs.find((t) => t.tab === "Upcoming");
+      assert.strictEqual(up.listLoaded, true, JSON.stringify(up));
     }],
     ["unknown empty-state wording → that tab times out (reported), others ok", "other empty wording", (r) => {
       assert.strictEqual(r.status, "partial");

@@ -42,6 +42,7 @@ const SCENARIOS = [
   { name: "no relative text, stale 1.5s", qs: "rel=0&stale=1500" },
   { name: "headers with year",        qs: "year=1&stale=600" },
   { name: "late route 3s",            qs: "route=3000" },
+  { name: "live empty wording (all-classes)", qs: "start=Upcoming&emptyUpcoming=1&emptyText=No%20upcoming%20assignments%20right%20now.&stale=800&load=2000" },
   { name: "other empty wording",      qs: "start=Upcoming&emptyUpcoming=1&emptyText=You%27re%20all%20caught%20up&stale=800&load=2000" },
   { name: "tabs missing (DOM drift)", qs: "noTabs=1" },
   { name: "live: opens on Upcoming showing Past due, self-switches 3s", qs: "autoSwitch=3000&emptyUpcoming=1&stale=600" },
