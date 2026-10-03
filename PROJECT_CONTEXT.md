@@ -111,12 +111,12 @@ Historically (≤ v0.5.0) the extension popup read this API over `localhost:3457
      - `GET /api/digest`: Assembles classes with categorized notices & assignments.
      - `GET /api/recent?hours=N`: Queries `posts` table from `teamspulse.db`.
    - CORS enabled for `chrome-extension://*` and `http://localhost`.
-3. **Browser extension (`extension/`)**: since v0.6.0 the extension **no longer reads this API** — it is standalone (see §2.5). `server.js` remains the JSON API for the self-host pipeline. Popup UI features (class grouping, All/Notices/Tasks tabs, collapsible filter bar, time filter, search, persisted per-class collapse state keyed by raw class name, 48 h due-soon highlight) are unchanged; the 15 s localhost polling was replaced by `chrome.storage.onChanged`.
-   - **`icons/`**: Native PNG icons (`icon16.png`, `icon48.png`, `icon128.png`).
+3. **Browser extension (`extension/`)**: since v0.6.0 the extension **no longer reads this API** — it is standalone (see §2.5). `server.js` remains the JSON API for the self-host pipeline. The 15 s localhost polling was replaced by `chrome.storage.onChanged`. The popup was redesigned in v0.7.0 (Overview / Tasks / Updates; see §2.5 "Popup"). The old class-card UI with collapse state, time filter and dropdowns is gone.
+   - **`icons/`**: PNG icons `icon16/32/48/128.png` (v0.7.3 pulse logo). The source is `assets/logo.svg` (48/128) and `assets/logo-small.svg` (heavier line for 16/32). Regenerate with `npm run build:icons` (`scripts/build-icons.js`, which renders through the project's Playwright Chromium, so no new dependency).
 
 ---
 
-## 2.5. Standalone Extension Architecture (v0.6.0 — on `main`)
+## 2.5. Standalone Extension Architecture (since v0.6.0; current release v0.7.3)
 
 ### Goal
 No Node.js / Express server for end users. Content scripts read the Teams pages the student already has open; data lives in `chrome.storage.local`; the popup and badge are computed in the browser. The extension makes **no network requests** (CSP `connect-src 'none'`; no `fetch`/XHR/WebSocket/`eval` in `extension/`).
@@ -133,26 +133,30 @@ flowchart LR
     CHROME -->|storage.onChanged| POP["popup.js\nbuildDigest + buildStatus"]
     CHROME -->|storage.onChanged + 30-min alarm| BADGE["badge = newPostCount"]
     POP -.->|tp:sync:cmd / tp:sync:status| CS1
+    POP -.->|tp:nav:cmd + tabs.update| CS1
+    CS1 -.->|tp:nav:task| CS2
 ```
 
 ### Manifest (verbatim intent)
 - `permissions`: `["alarms", "storage", "unlimitedStorage"]` — no `host_permissions`, no `tabs`, no `scripting`.
 - `content_security_policy.extension_pages`: `script-src 'self'; object-src 'self'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'`.
 - Content-script matches: `https://teams.microsoft.com/*`, `https://teams.cloud.microsoft/*` (seen live 2026-10-01), `https://assignments.edu.cloud.microsoft/*` (iframe).
+- `icons` (top level, added v0.7.3) and `action.default_icon`: 16/32/48/128. Without the top-level key, `chrome://extensions` showed a generic icon.
+- The popup calls `chrome.tabs.update` / `chrome.tabs.create` / `chrome.windows.update` (Open in Teams). These need **no** `tabs` permission, which only gates reading url/title. This is proven by the e2e test with the shipped manifest.
 
 ### Component Breakdown
 
 | File | Role |
 |------|------|
-| `extension/core/digest-utils.js` | Parsing rules shared with Node (`isNoteworthy`, `classify`, `extractDate`, `extractTime`, …). `extractDate` scans every word-date match; earliest real date wins. |
+| `extension/core/digest-utils.js` | Parsing rules shared with Node (the root `digest-utils.js` just re-exports this file, so changes also affect the self-host digest): `isNoteworthy`, `classify`, `extractDate`, `extractTime`, …. `extractDate` reads ISO `YYYY-MM-DD` / `YYYY/MM/DD` first (19xx/20xx only, v0.7.0), then `DD.MM.YYYY`, then scans every word-date match; the earliest real date wins. |
 | `extension/core/fingerprint.js` | `fingerprintString`, async `sha256Hex` (SubtleCrypto) — identical hashes to `db.js`. |
 | `extension/core/store.js` | `createStore(backend)`: promise-queued writes, 200-post cap, filter-first/dedup-second, `recordHealth`, `clearAll` (all `tp:v1:*`). |
 | `extension/core/shape.js` | `buildDigest`, `buildStatus` (same shapes as `server.js`) + `scraper` / `scraperIssues` (extension only). |
 | `extension/core/messages.js` | `handleMessage`: origin allowlist, size limits, tab-context join via `chrome.storage.session`, `TP_HEALTH` status allowlist. |
-| `extension/content/teams-top.js` | Class name, posts, health reports, Sync all classes, re-send after Clear, orphan shutdown. |
-| `extension/content/assignments-frame.js` | 3-tab loop → `TP_ASSIGNMENTS`; retries twice (3 s) while the class context is missing. |
-| `extension/background.js` | `importScripts` core, message router, `tabs.onRemoved` cleanup, badge (install, startup, storage change, 30-min alarm). Clears the legacy `teamspulse-badge-poll` alarm. |
-| `extension/popup.js` | Reads the store; live-updates on `storage.onChanged`; no-data / stale / scraper banners; Clear stored data (two-click confirm); Sync all classes. Scraped text only via `textContent`. |
+| `extension/content/teams-top.js` | Class name, posts, health reports, Sync all classes, auto-sync (at most every 6 h, `tp:settings:autoSync`), re-send after Clear, orphan shutdown, **Open in Teams** (`runNav` / `navigateToPost` / `navigateToTask`, v0.7.1). |
+| `extension/content/assignments-frame.js` | 3-tab loop → `TP_ASSIGNMENTS` plus a capture report (`tp:v1:capture-report`). Retries twice (3 s) while the class context is missing. Jumps to an assignment card (`maybeNav` / `navToCard`, v0.7.1); a pending jump runs **before** a capture (v0.7.2). |
+| `extension/background.js` | `importScripts` core, message router, `tabs.onRemoved` cleanup, badge = new-post count (install, startup, storage change, 30-min alarm). Clears the legacy `teamspulse-badge-poll` alarm. |
+| `extension/popup.js` | Reads the store; live-updates on `storage.onChanged`. Overview / Tasks / Updates views, class chips, search, done/read marks, Open in Teams, `.ics` export, capture details (shown only on a problem), no-data / stale / scraper banners, Clear stored data (two-click confirm), Sync. Scraped text goes only through `textContent`; `https:` links are the only `<a>` elements. |
 
 ### Class detection (Implemented: `getCurrentClassName()` in `teams-top.js`)
 Confirmed with `tools/dom-probe.js` on `teams.cloud.microsoft`: `document.title` is `Teams and Channels | <team name> | <channel> | Microsoft Teams` and the channel heading is `h2[data-tid="channelTitle-text"]`. The team name is the title segment immediately before the segment equal to the heading. If the two signals disagree → `null` → nothing sent (and a `no-class` health report after 10 s). The team name matched the `[data-testid="team-name"]` text exactly in live screenshots, so extension and self-host keys line up.
@@ -163,23 +167,53 @@ Selectors from `tools/dom-probe-teams-list.js`: grid `[data-tid="teams-grid-view
 ### Scraper health (Implemented)
 `teams-top.js` reports once per onset: `no-class` (channel view on screen, class unresolved for 10 s) and `no-messages` (class resolved, zero messages for 60 s). `buildStatus` marks the scraper `suspect` while a report is newer than the relevant last successful capture; the popup shows "Scraper may be out of date. Check for an extension update."
 
+### Popup (Implemented v0.7.0: `popup.js`)
+Organised around "what do I need to do, and by when", not by class.
+- **Overview** (`renderOverview`, the default): a one-line summary ("2 overdue · 1 today") plus the next item. Then `bucketize()` groups: Overdue → Today → Tomorrow → This week → Later → No due date. Overdue items older than 14 days (`OLD_OVERDUE_DAYS`) fold behind "Show N older". Below that, up to 5 unread announcements not already on the agenda.
+- **Agenda events** (`buildModel`): announcements tagged CT/Quiz, Exam, Presentation, Reschedule, Cancelled or Deadline (`EVENT_TAGS`) with a date today or later. They are deduplicated per class/day/tag (newest post kept) and dropped when an assignment due that day has its title in the post.
+- **Tasks** (`renderTasks`): open assignments in the same buckets. "Mark done" goes to `tp:ui:done` and only hides the task in TeamsPulse.
+- **Updates** (`renderUpdates`): announcements newest first, grouped Today / Yesterday / This week / Earlier. "New" means `isNew` (24 h capture window) and not in `tp:ui:read`; there is also "Mark all as read".
+- Tab counts show "things that need you": attention items, open tasks, unread updates. `#countAssignments` = open (not done) tasks; the e2e test asserts it.
+- Class chips (stable colour per raw class key via `classColor`) filter all tabs. Search lives behind 🔍, Auto-sync behind ⚙, and `.ics` export under the list. The popup is fixed at 380×600 and only `<main>` scrolls.
+- Links (`appendLinkified`): only `https:` URLs that parse become `<a target=_blank rel="noopener noreferrer">` (owner-approved 2026-10-03). Long ones show as "🔗 host/…"; other schemes stay text.
+- Done/read keys are built from raw class + title/due date or timestamp/subject (`taskKey` / `noticeKey`). `pruneUiSets` drops keys whose item is gone, and Clear stored data removes them.
+
+### Open in Teams (Implemented v0.7.1, fixed v0.7.2: popup → `teams-top.js` → `assignments-frame.js`)
+- **Popup** (`openInTeams`): stores `tp:nav:cmd` `{ kind, id, at, className, … }` **first**, because switching tabs closes the popup. It then activates a Teams tab known from the background's `tp:tabctx:<tabId>` session notes (a tab showing that class is preferred) and focuses its window. If none is known, it opens `https://teams.cloud.microsoft/` in a new tab. Then `window.close()`.
+- **Top frame** (`runNav`): commands older than 2 min (`NAV_MAX_AGE_MS`) are ignored. Only a **visible** tab acts; a hidden tab keeps the command until `visibilitychange`, and a freshly opened tab reads it on load. Commands are refused while syncing.
+  - `post`: `openClass()` (same grid + class-button navigation as Sync). Then `findPostIndex()` matches with the capture's own `extractPosts()`: `timestampIso` + (subject equal or body starts with the first 40 chars), falling back to text only. If not found, up to 8 rounds of scrolling the first message into view load older posts. On a hit it scrolls to the post and outlines it for 3.5 s. Misses show a text-only toast on the Teams page.
+  - `task`: forwards `tp:nav:task` and clicks the Assignments app button. The frame never reads `tp:nav:cmd` directly, so a click made during a sync can't move the list mid-capture.
+- **Frame** (`maybeNav` → `navToCard`): selects the item's tab (Upcoming / Past due), then finds the card by GUID (`assignmentId`), else by title (+ class short name in the all-classes view). It walks a virtualized list until the card renders, scrolls to it and outlines it. **The card is not clicked**: opening it navigates the frame, which would start a capture of a page with no list. A pending jump defers `requestScrape` (v0.7.2) so it isn't stuck behind a minute-long capture.
+- **Live (owner, 2026-10-03, v0.7.2):** posts (including older ones found by scrolling up) and assignment cards both open correctly.
+
+### Local storage keys (besides `tp:v1:*` data from `store.js`)
+| Key | Area | Owner | Purpose |
+|---|---|---|---|
+| `tp:tabctx:<tabId>` | session | background (`messages.js`) | class open in each Teams tab; also how the popup finds Teams tabs |
+| `tp:sync:cmd` / `tp:sync:status` / `tp:sync:lastAuto` | local | popup ↔ `teams-top.js` | Sync all classes command, progress, last auto-sync |
+| `tp:settings:autoSync` | local | popup | Auto-sync toggle (default on) |
+| `tp:nav:cmd` / `tp:nav:task` | local | popup → top → frame | Open in Teams |
+| `tp:ui:done` / `tp:ui:read` | local | popup | tasks marked done / announcements read (cleared by Clear stored data) |
+
 ### Important constraints
 - **Content scripts must not import from `core/`** — IIFE-wrapped and self-contained.
 - **`importScripts` shares one global scope**: top-level `const`/`let` names in `background.js` and `core/*.js` must be unique (`test/background-load.test.js` enforces it).
 - **After an extension reload/update, already-open Teams tabs are orphaned** (Chrome doesn't re-inject). The script stops cleanly; the user must reload the Teams tab. Auto re-injection would need `scripting` + host permissions — **not added** (owner decision pending).
 - **Never add permissions, host matches, network calls or remote code without the owner's approval** (see `CLAUDE.md`).
 
-### Verification status (2026-10-01)
+### Verification status (updated 2026-10-03)
 - **Verified live**: post capture and class detection on `teams.cloud.microsoft` (2 classes, one account); service worker registration after the `_store` fix.
 - **Verified live by the owner (2026-10-01)**: Sync all classes, including returning to the classes grid between classes (which back control fired — "All teams" text or the app-bar fallback — was not observed).
-- **Not verified live**: assignments capture, health warnings, .ics import into calendar apps, other locales/layouts.
+- **Verified live by the owner (2026-10-03, one student account, v0.7.2)**: Sync captures assignments without stalling on the empty Upcoming tab. Open in Teams works for assignment cards and for announcements, including older posts found by scrolling up. The v0.7.0 popup is in daily use.
+- **Not verified live**: health warnings, .ics import into calendar apps, other locales/layouts (empty-state and label matching is English-only), multiple Teams tabs, a class open on a non-General channel when opening a post.
 - **Verified against mocks**: server parity (`test/server-parity.test.js`), real unpacked extension end-to-end (`test-dom/extension-e2e.js`).
 
 ### Release & packaging (Implemented)
 - `npm run pack:extension` (`scripts/pack-extension.js`): zip of runtime files only, built with Node `zlib` (no deps); fails if a file referenced by the manifest, background `importScripts` or popup is missing. Output `dist/teamspulse-extension-<version>.zip` (`dist/` is git-ignored).
 - `PRIVACY.md` (store privacy policy) and `docs/store-listing.md` (descriptions, permission justifications, data-usage answers, open decisions).
-- GitHub pre-release **v0.6.0** (tag on `1e47659`) with the zip attached: https://github.com/Sa-Alfy/teampulse/releases/tag/v0.6.0
-- To release: bump `extension/manifest.json` `version`, `npm run pack:extension`, tag `vX.Y.Z`, `gh release create vX.Y.Z dist/teamspulse-extension-X.Y.Z.zip --prerelease`.
+- GitHub releases, each with its zip: v0.6.0–v0.7.1 are pre-releases. **v0.7.2** was promoted to a full release after the owner confirmed it live. **v0.7.3** (logo) is the current **Latest**: https://github.com/Sa-Alfy/teampulse/releases/tag/v0.7.3
+- To release: bump `extension/manifest.json` `version` and update the CHANGELOG heading, the README status line and the `PRIVACY.md` "applies to" version. Commit, push `main`, run `npm run pack:extension`, then `gh release create vX.Y.Z dist/teamspulse-extension-X.Y.Z.zip --target main [--prerelease]`. Use `--prerelease` until the owner confirms the change on live Teams; promote with `gh release edit vX.Y.Z --prerelease=false --latest`. `package.json` `version` (0.5.0) is not used for releases.
+- Repo-local git identity is set for this checkout (`git config user.name/user.email`, owner's choice 2026-10-03). Never push without the owner asking.
 - **Open owner decisions**: product name (trademark), store data-usage wording, privacy-policy URL, auto re-injection after updates (needs `scripting` + host permissions).
 
 ---
@@ -217,6 +251,13 @@ Selectors from `tools/dom-probe-teams-list.js`: grid `[data-tid="teams-grid-view
   - Card ID attribute contains a stable GUID. **Implemented**: `teams.js` reads it into
     `assignmentId` (see `extractGuid`), alongside a `dueDate` parsed from the card's
     `datetime`/`title` attribute or its description text.
+- **Empty-state wording (live, 2026-10-03)**: the class view says "No assignments"; the left-bar
+  all-classes view says **"No upcoming assignments right now."** (with "Try navigating to the
+  individual class team…"). Before v0.7.2, `EMPTY_RE` only knew the first wording, so an empty Upcoming
+  waited the full 20 s and the capture came back partial. **Implemented**
+  (`assignments-frame.js` `EMPTY_RE`): `/^\s*no\s+(?:[a-z'-]+\s+){0,3}assignments\b/i`, matched against
+  a whole text node so a card title like "no late assignments accepted" doesn't count. Unknown wording
+  ("You're all caught up") still times out and is reported, which is the matrix test "other empty wording".
 
 ### 3.5. Empty Class State Tolerance (The CSE 304 Fix)
 - Classes with 0 assignments never render the "Upcoming" / "Past due" / "Completed" tabs; they display `"No assignments in this class yet"`.
@@ -301,12 +342,16 @@ flowchart TD
     Step3["3. Rule-Based Digest Builder — keyword/regex parsing, digest.md (✅ Complete)"]
     Step4["4. Storage & Deduplication Layer — SQLite, teamspulse.db (✅ Complete)"]
     Step5["5. Client Interface — Chrome/Edge Extension + Express API (✅ Complete)"]
-    Step6["6. Zero-Install Distribution — standalone extension (🔄 v0.6.0 done, store release next)"]
+    Step6["6. Zero-Install Distribution — standalone extension (🔄 v0.7.3 released, store submission next)"]
     
     Step1 --> Step2 --> Step3 --> Step4 --> Step5 --> Step6
 ```
 
 ### Step 5: Client Interface (Chrome Extension) — Design Decision Log
+> **Historical (v0.5.x, server-backed popup).** Superseded by the standalone extension (§2.5) and the
+> v0.7.0 popup redesign (§2.5 "Popup"). The class cards, collapse state, time filter and
+> dropdowns described below no longer exist. The date parsing and sorting notes still apply to `shape.js`.
+
 - **Architecture**: Chrome Extension (Manifest V3) + Local Express API (`server.js` on port `3457`).
 - **Data Flow**: `notices.json` & `assignments.json` & `teamspulse.db` -> `server.js` -> Extension popup.
 - **Categorization**: Grouped by class (`CSE 312`, `PHY 104`, etc.) with subheadings for Notices and Tasks.
@@ -324,9 +369,11 @@ flowchart TD
 - [x] **Standalone extension** (v0.6.0): reads Teams in-browser, no Node.js / server — see §2.5.
 - [x] Golden parity test vs `server.js`; extension E2E test (mocks).
 - [x] Packaging, store listing draft, `PRIVACY.md`, GitHub pre-release v0.6.0.
-- [ ] Live verification of assignments + Sync all classes.
+- [x] Live verification of assignments + Sync all classes (owner, 2026-10-03, v0.7.2).
+- [x] Student-focused popup (v0.7.0), Open in Teams (v0.7.1), final 128 px icon / logo (v0.7.3).
 - [ ] Chrome Web Store submission (product name undecided — "Teams" may be a trademark issue).
 - [x] Telegram push (self-host): `notify.js`.
+- Ideas raised but not done (need an owner decision): toolbar badge counting overdue / due-today tasks instead of new posts (changes `background.js`); auto re-injection after updates (`scripting` + host permissions).
 
 ---
 
@@ -355,11 +402,13 @@ flowchart TD
 
 ## 7. Test Coverage
 
-### Unit Tests (`npm test` — `node --test`, 85 total: 84 pass, 1 skipped placeholder)
+Counts as of v0.7.3 (2026-10-03): `node --test` 104 (103 pass, 1 skipped placeholder) · `npm run test:dom` 47 · `npm run test:e2e` 5, all passing.
+
+### Unit Tests (`npm test` — `node --test`, 104 total: 103 pass, 1 skipped placeholder)
 
 - **`test/server-parity.test.js`**: golden test — runs a temp copy of the real `server.js` (only `PORT` rewritten) on a random port with fixture data + a DB written by the copied `db.js`, and deep-compares `/api/digest` and `/api/status` with `buildDigest`/`buildStatus` (ignoring `generatedAt`, `serverTime`, extension-only `scraper*`). Found and fixed: `totalRecorded` must count filtered-out (surfaced=0) records like the server's `COUNT(*)`.
 
-- **`test/digest-utils.test.js`**: `extractDate` (impossible dates, US-format fallback, ambiguous month words, leap years, **every-match scan** — "CT-2 will be held on 5 October 2026", ordinals, month-first, earliest-date-wins), `extractTime`, `classify`, `isNoteworthy`, `filterRecentPosts`, `truncate`, `escapeCell`, `shortClassName`, `sectionLabel`.
+- **`test/digest-utils.test.js`**: `extractDate` (ISO `YYYY-MM-DD` incl. `T…` suffix and rejection of impossible / embedded digits, impossible dates, US-format fallback, ambiguous month words, leap years, **every-match scan** — "CT-2 will be held on 5 October 2026", ordinals, month-first, earliest-date-wins), `extractTime`, `classify`, `isNoteworthy`, `filterRecentPosts`, `truncate`, `escapeCell`, `shortClassName`, `sectionLabel`.
 - **`test/hash-post.test.js`**: `db.hashPost` parity, fingerprint tuple collision checks, body capping at 500 chars.
 - **`test/assignment-sort.test.js`**: assignment date extraction and ascending sort (soonest first, undated last).
 - **`test/notify.test.js`**: Telegram chunking, unconfigured env safety, token redaction.
@@ -369,7 +418,7 @@ flowchart TD
 - **`test/background-load.test.js`**: loads `background.js` + all `importScripts` files into **one** vm context (as Chrome does) — catches duplicate top-level `const` names, which kill the service worker ("status code 15"). Also checks alarms + badge on install.
 - **`test-dom/popup-xss.test.js`** registers a skipped placeholder under `node --test`; it runs under `npm run test:dom`.
 
-### DOM / Integration Tests (`npm run test:dom` — Playwright headless Chromium, 16 tests, all passing)
+### DOM / Integration Tests (`npm run test:dom` — Playwright headless Chromium, 47 tests, all passing)
 
 > **Note**: fixtures prove logic only, not compatibility with the live Teams DOM. Fixture shapes come from `tools/dom-probe*.js` output.
 
@@ -378,9 +427,11 @@ flowchart TD
 - reliability: Clear stored data → re-send; unrelated storage writes → no re-send; rejected `TP_POSTS` retried; orphaned script (extension reloaded) stops without page errors
 - Sync all classes: visits every class in the Classes panel (hidden teams skipped), one `TP_POSTS` per class under the right name, returns to the grid
 - health (Playwright fake clock): no-class after 10 s, no-messages after 60 s, healthy channel never reports
-- `assignments-frame.js`: 3-tab fixture → one `TP_ASSIGNMENTS`; original tab restored
-- popup: XSS payloads render as literal text (no `<img>`, dialog or request); stale banner; Clear stored data wipes `tp:v1:*`, tab contexts and badge; scraper banner
+- Open in Teams (`teams-top.js`): post outlined by subject + timestamp; body-start match without a subject; not found → on-page notice, nothing outlined; command older than 2 min ignored
+- `assignments-frame.js`: 3-tab fixture → one `TP_ASSIGNMENTS`, original tab restored; all-classes / virtualized views; jump after a capture selects the item's tab and outlines its card; a jump pending at frame load runs **before** the capture, which still follows
+- assignments mock matrix (`test-dom/assignments-matrix.js`, `fixtures/assignments-mock.html`): stale lists, node reuse, hidden/deferred frames, self-switching tabs, DOM drift, the live wording "No upcoming assignments right now." (Upcoming ok, no stall), unknown wording (reported timeout), report carries no titles/class names
+- popup: XSS payloads render as literal text (no `<img>`, dialog or request); stale banner; Clear stored data wipes `tp:v1:*`, `tp:ui:*`, tab contexts and badge; scraper banner; `.ics` export; capture details; Overview urgency groups + mark done persists; Mark all as read + class chip filter; only `https:` links become `<a>` (new tab, `noopener noreferrer`); clicking an announcement stores `tp:nav:cmd` and focuses the known Teams tab; task click carries tab/title/GUID, the done box doesn't open Teams; no known Teams tab → new Teams tab
 
-### Extension E2E (`npm run test:e2e` — `test-dom/extension-e2e.js`, 4 tests, all passing)
+### Extension E2E (`npm run test:e2e` — `test-dom/extension-e2e.js`, 5 tests, all passing)
 
-Loads the **real unpacked extension** (Playwright persistent context, `channel: "chromium"`, headless) from a temp copy whose manifest gets `127.0.0.1` matches and whose `messages.js` allowlist gets the mock origins (both patches asserted; shipped files untouched). Mock Teams page and assignments iframe are served on different ports (cross-origin). Verifies content scripts → service worker → `chrome.storage.local` (posts + assignments), badge text, popup rendering (posts, tasks, hostile text literal, no `<img>`/dialog, no http(s) requests), and no page errors.
+Loads the **real unpacked extension** (Playwright persistent context, `channel: "chromium"`, headless) from a temp copy whose manifest gets `127.0.0.1` matches and whose `messages.js` allowlist gets the mock origins (both patches asserted; shipped files untouched). Mock Teams page and assignments iframe are served on different ports (cross-origin). Verifies content scripts → service worker → `chrome.storage.local` (posts + assignments), badge text, popup rendering (posts, tasks, hostile text literal, no `<img>`/dialog, no http(s) requests). It also verifies Open in Teams with the real `chrome.tabs` / `chrome.windows` APIs and shipped permissions: the hidden Teams tab is brought forward and the post is outlined. Finally it checks there are no page errors.
