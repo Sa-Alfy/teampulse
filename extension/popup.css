@@ -690,3 +690,11 @@ input:focus-visible,
     animation: none !important;
   }
 }
+
+/* Cards that open the item in Teams */
+.openable { cursor: pointer; }
+.agenda-row.openable:hover,
+.notice-card.openable:hover { border-color: var(--border-highlight); background-color: #20263a; }
+.agenda-row.overdue.openable:hover { background-color: rgba(239, 68, 68, 0.16); }
+.openable:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.more-btn.inline { align-self: auto; padding: 0; font-size: 10.5px; }

@@ -400,9 +400,83 @@ async function main() {
     await ctx.close();
   });
 
+  // ── Open in Teams (popup card click → tp:nav:cmd) ──────────────────────
+  async function navPage() {
+    const ctx  = await browser.newContext();
+    const page = await ctx.newPage();
+    await page.addInitScript({ content: CHROME_STUB_TEAMS });
+    await page.goto("file:///" + path.join(FIXTURE_DIR, "teams-channel.html").replace(/\\/g, "/"));
+    await page.addScriptTag({ path: path.join(SCRIPT_DIR, "teams-top.js") });
+    const fire = (cmd) => page.evaluate((c) => {
+      const full = { id: `t-${Math.random()}`, at: Date.now(), ...c };
+      window.__storageListeners.forEach((l) => l({ "tp:nav:cmd": { newValue: full } }, "local"));
+    }, cmd);
+    return { ctx, page, fire };
+  }
+
+  await runTest("open in Teams: post in the open class is scrolled to and outlined", async () => {
+    const { ctx, page, fire } = await navPage();
+    await fire({ kind: "post", className: FIXTURE_CLASS, subject: "Lab Cancelled", bodyStart: "",
+      timestampIso: new Date("Tuesday, September 30, 2026 2:00 PM").toISOString() });
+    await page.waitForFunction(() => document.getElementById("msg-2").style.outline.includes("solid"), null, { timeout: 5000 });
+    assert.strictEqual(await page.evaluate(() => document.getElementById("msg-1").style.outline), "", "wrong post outlined");
+    await ctx.close();
+  });
+
+  await runTest("open in Teams: body-start match works without a subject", async () => {
+    const { ctx, page, fire } = await navPage();
+    await fire({ kind: "post", className: FIXTURE_CLASS, subject: "", bodyStart: "CT-3 will be held on", timestampIso: null });
+    await page.waitForFunction(() => document.getElementById("msg-1").style.outline.includes("solid"), null, { timeout: 5000 });
+    await ctx.close();
+  });
+
+  await runTest("open in Teams: post not found → on-page notice, nothing outlined", async () => {
+    const { ctx, page, fire } = await navPage();
+    await fire({ kind: "post", className: FIXTURE_CLASS, subject: "No such post", bodyStart: "", timestampIso: null });
+    await page.waitForFunction(() => /couldn't find that post/.test(document.body.textContent), null, { timeout: 20000 });
+    const outlined = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('[data-tid="channel-pane-message"]')).filter((m) => m.style.outline).length);
+    assert.strictEqual(outlined, 0);
+    await ctx.close();
+  });
+
+  await runTest("open in Teams: stale command (older than 2 min) is ignored", async () => {
+    const { ctx, page, fire } = await navPage();
+    await fire({ kind: "post", className: FIXTURE_CLASS, subject: "Lab Cancelled", at: Date.now() - 5 * 60e3 });
+    await page.waitForTimeout(1500);
+    assert.strictEqual(await page.evaluate(() => document.getElementById("msg-2").style.outline), "");
+    await ctx.close();
+  });
+
   // ── assignments-frame.js tests ─────────────────────────────────────────
 
   console.log("\nassignments-frame.js:");
+
+  await runTest("open in Teams: after the capture, the frame selects the item's tab and outlines its card", async () => {
+    const ctx  = await browser.newContext();
+    const page = await ctx.newPage();
+    await page.addInitScript({ content: `
+      window.__msgs = []; window.__nav = [];
+      window.chrome = {
+        runtime: { id: "test-extension-id", sendMessage: (m) => { window.__msgs.push(JSON.parse(JSON.stringify(m))); } },
+        storage: {
+          local: { get: (keys, cb) => cb({}) },
+          onChanged: { addListener: (fn) => window.__nav.push(fn) },
+        },
+      };` });
+    await page.goto("file:///" + path.join(FIXTURE_DIR, "assignments.html").replace(/\\/g, "/"));
+    await page.addScriptTag({ path: path.join(SCRIPT_DIR, "assignments-frame.js") });
+    await waitAssignMsgs(page, 1, 20000); // capture done, Upcoming restored
+    await page.evaluate(() => window.__nav.forEach((l) => l({ "tp:nav:cmd": { newValue: {
+      kind: "task", id: "n1", at: Date.now(), tab: "Past due", title: "HW-3",
+      assignmentId: "ccdd3456-7890-3456-cdef-012345678901" } } }, "local")));
+    await page.waitForFunction(() => {
+      const card = document.getElementById("card-pd-1-ccdd3456-7890-3456-cdef-012345678901");
+      return card && card.style.outline.includes("solid");
+    }, null, { timeout: 10000 });
+    assert.strictEqual(await page.evaluate(() => document.querySelector('[data-test="Past due"]').getAttribute("aria-selected")), "true");
+    await ctx.close();
+  });
 
   // (4) 3-tab fixture → single TP_ASSIGNMENTS with all 4 cards; original tab restored
   await runTest("3-tab fixture → TP_ASSIGNMENTS with all cards; original tab restored", async () => {

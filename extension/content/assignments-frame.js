@@ -461,6 +461,7 @@ let _deferTimer = null;
  */
 function requestScrape(trigger) {
   if (_running) return;
+  if (_navBusy) { setTimeout(() => requestScrape(trigger), 3000); return; } // jumping to a card
   const wait = COOLDOWN_MS - (Date.now() - _lastRunMs);
   if (_lastRunMs && wait > 0) {
     if (!_deferTimer) _deferTimer = setTimeout(() => { _deferTimer = null; requestScrape(`${trigger}+cooldown`); }, wait);
@@ -617,6 +618,7 @@ async function scrape(trigger = "load") {
     }, 2);
   } finally {
     _running = false;
+    setTimeout(() => maybeNav(), 300); // a card jump waiting on this capture
   }
 }
 
@@ -651,6 +653,72 @@ function send(msg, retriesLeft) {
   } catch (_) { /* extension context invalidated */ }
 }
 
+// ── Open in Teams: find one assignment (popup card click) ─────────────────
+// The popup stores { kind: "task", id, at, tab, title, assignmentId,
+// classShort } under tp:nav:cmd; the top frame opens this app. Once no capture
+// is running, select the item's tab, scroll the list until its card shows,
+// then scroll to it and outline it. The card is NOT clicked: opening it would
+// navigate the frame and trigger a capture of a page without a list.
+
+const NAV_CMD_KEY    = "tp:nav:cmd";
+const NAV_MAX_AGE_MS = 120_000;
+let _navHandled = null;
+let _navCmd     = null;
+let _navBusy    = false;
+
+function cardMatches(card, cmd) {
+  const guid = extractGuid(card.getAttribute("id")) || extractGuid(card.getAttribute("data-id"));
+  if (cmd.assignmentId && guid) return guid === cmd.assignmentId;
+  const titleEl = card.querySelector(".fui-CardHeader__header") || card.querySelector(ALL_UP_TITLE_SEL);
+  const title = titleEl ? (titleEl.textContent || "").replace(/\s+/g, " ").trim() : "";
+  if (!title || title !== cmd.title) return false;
+  // All-classes view: several classes can share a title ("Lab Report-01").
+  return !cmd.classShort || !isAllClassesView() || (card.textContent || "").includes(cmd.classShort);
+}
+
+function findCard(cmd) {
+  return visibleCards().find((c) => cardMatches(c, cmd)) || null;
+}
+
+async function navToCard(cmd) {
+  if (cmd.tab && TABS.includes(cmd.tab) && selectedTabName() !== cmd.tab) {
+    const tabEl = findTabEl(cmd.tab);
+    if (tabEl) {
+      tabEl.click();
+      await waitFor(() => selectedTabName() === cmd.tab, TAB_SELECT_MS);
+      await new Promise((r) => setTimeout(r, SETTLE_MS));
+    }
+  }
+  let card = await waitFor(() => findCard(cmd), 4000);
+  const sc = card ? null : scrollContainer();
+  if (sc) { // virtualized list: walk it until the card is rendered
+    sc.scrollTop = 0;
+    for (let i = 0; i < MAX_SCROLL_STEPS && !card; i++) {
+      await new Promise((r) => setTimeout(r, SCROLL_SETTLE_MS));
+      card = findCard(cmd);
+      if (card || sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 2) break;
+      sc.scrollTop += Math.max(100, Math.floor(sc.clientHeight * 0.8));
+    }
+  }
+  if (!card) return false;
+  card.scrollIntoView({ block: "center", behavior: "smooth" });
+  const prev = card.style.outline;
+  card.style.outline = "3px solid #818cf8";
+  setTimeout(() => { card.style.outline = prev; }, 3500);
+  return true;
+}
+
+function maybeNav(cmd) {
+  if (cmd) _navCmd = cmd;
+  const c = _navCmd;
+  if (!c || c.kind !== "task" || c.id === _navHandled || Date.now() - (Number(c.at) || 0) > NAV_MAX_AGE_MS) return;
+  if (_running || !documentRendered()) return; // retried after the capture / when shown
+  _navHandled = c.id;
+  _navCmd = null;
+  _navBusy = true;
+  navToCard(c).catch(() => {}).finally(() => { _navBusy = false; });
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────
 // Runs on load, and again when the app navigates inside the frame (SPA
 // route/hash change), when the Teams tab becomes visible, or when a hidden
@@ -665,7 +733,13 @@ if (typeof module === "undefined") {
     else if (rendered && !wasRendered) requestScrape(why);
     wasRendered = rendered;
   };
-  setInterval(() => recheck("frame-shown"), 2000);
+  setInterval(() => { recheck("frame-shown"); maybeNav(); }, 2000);
+  try {
+    chrome.storage.local.get([NAV_CMD_KEY], (res) => maybeNav(res && res[NAV_CMD_KEY]));
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === "local" && changes[NAV_CMD_KEY] && changes[NAV_CMD_KEY].newValue) maybeNav(changes[NAV_CMD_KEY].newValue);
+    });
+  } catch (_) { /* storage unavailable (tests / context gone) */ }
   window.addEventListener("resize", () => recheck("frame-shown"));
   window.addEventListener("popstate", () => recheck("navigation"));
   window.addEventListener("hashchange", () => recheck("navigation"));

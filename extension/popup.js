@@ -449,7 +449,8 @@ function buildModel(nowMs) {
   for (const c of rawDigestData.classes) {
     const key = c.key || c.rawClassName || c.className;
     if (selectedClass !== "all" && key !== selectedClass) continue;
-    const base = { classKey: key, classLabel: classLabelOf(c), rawClassName: c.rawClassName, color: classColor(key) };
+    const base = { classKey: key, classLabel: classLabelOf(c), classShort: c.className,
+      rawClassName: c.rawClassName, color: classColor(key) };
 
     for (const a of c.assignments || []) {
       if (!matches(`${a.title} ${a.details || ""} ${a.tab} ${base.classLabel}`)) continue;
@@ -533,6 +534,69 @@ function sectionHeader(label, count, tone) {
   return h;
 }
 
+// ── Open in Teams ───────────────────────────────────────────────────────────
+// Like Sync: the popup can't script a tab, so it stores a command that the
+// Teams tab's content script runs (open the class and scroll to the post, or
+// open the Assignments app and find the card). The popup then brings a Teams
+// tab it knows about to the front (tab ids from the background's per-tab
+// class notes), or opens Teams in a new tab. chrome.tabs.update/create and
+// chrome.windows.update need no extra permission.
+
+const NAV_CMD_KEY  = "tp:nav:cmd";
+const TEAMS_HOME   = "https://teams.cloud.microsoft/";
+
+function postCommand(it) {
+  const n = it.n;
+  const body = (n.bodySnippet || "").replace(/…$/, "").slice(0, 40);
+  return { kind: "post", className: it.classKey, subject: n.subject || "", bodyStart: body,
+    timestampIso: n.timestampIso || null };
+}
+
+function taskCommand(it) {
+  return { kind: "task", className: it.classKey, classShort: it.classShort, tab: it.a.tab,
+    title: it.a.title || "", assignmentId: it.a.assignmentId || null };
+}
+
+async function openInTeams(cmd) {
+  // Store first: switching tabs closes the popup and ends this script.
+  await chrome.storage.local.set({ [NAV_CMD_KEY]: { ...cmd, id: `${Date.now()}-${Math.random()}`, at: Date.now() } });
+  let tabIds = [];
+  try {
+    const ctx = await chrome.storage.session.get(null);
+    const entries = Object.entries(ctx || {}).filter(([k]) => k.startsWith(TAB_CTX_PREFIX));
+    // A tab already showing that class first, then any other Teams tab.
+    entries.sort(([, a], [, b]) => (b === cmd.className) - (a === cmd.className));
+    tabIds = entries.map(([k]) => Number(k.slice(TAB_CTX_PREFIX.length))).filter(Number.isInteger);
+  } catch (_) { /* no session storage: fall through to a new tab */ }
+  for (const id of tabIds) {
+    try {
+      const tab = await chrome.tabs.update(id, { active: true });
+      if (tab && typeof tab.windowId === "number") await chrome.windows.update(tab.windowId, { focused: true });
+      window.close();
+      return;
+    } catch (_) { /* tab gone — try the next */ }
+  }
+  try {
+    await chrome.tabs.create({ url: TEAMS_HOME });
+    window.close();
+  } catch (_) {
+    syncStatus.textContent = "Couldn't switch to Teams. Open your Teams tab, then click the card again.";
+  }
+}
+
+/** Whole card opens in Teams on click / Enter; inner controls stop the click. */
+function makeOpenable(node, label, onOpen) {
+  node.classList.add("openable");
+  node.tabIndex = 0;
+  node.setAttribute("role", "link");
+  node.setAttribute("aria-label", label);
+  node.title = label;
+  node.addEventListener("click", onOpen);
+  node.addEventListener("keydown", (e) => {
+    if (e.target === node && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); onOpen(); }
+  });
+}
+
 function agendaRow(it, nowMs) {
   const row = el("div", `agenda-row ${it.kind}`);
   row.style.setProperty("--c", it.color);
@@ -588,6 +652,7 @@ function agendaRow(it, nowMs) {
     box.checked = it.done;
     box.title = it.done ? "Mark as not done" : "Mark as done (only hides it here; Teams is not changed)";
     box.setAttribute("aria-label", `${it.done ? "Undo done" : "Mark done"}: ${it.title}`);
+    box.addEventListener("click", (e) => e.stopPropagation()); // not "open in Teams"
     box.addEventListener("change", () => {
       if (box.checked) doneSet.add(it.key); else doneSet.delete(it.key);
       saveUiSet(UI_DONE_KEY, doneSet);
@@ -596,6 +661,11 @@ function agendaRow(it, nowMs) {
     side.appendChild(box);
   }
   row.appendChild(side);
+  if (it.kind === "task") {
+    makeOpenable(row, `Open this assignment in Teams (${it.classLabel})`, () => openInTeams(taskCommand(it)));
+  } else {
+    makeOpenable(row, `Open this announcement in Teams (${it.classLabel})`, () => openInTeams(postCommand(it.notice)));
+  }
   return row;
 }
 
@@ -628,19 +698,30 @@ function noticeCard(it, nowMs) {
   if (n.author) foot.appendChild(el("span", "notice-author", n.author));
   card.appendChild(foot);
 
-  // Click expands the text and counts as reading it.
-  card.addEventListener("click", () => {
-    text.classList.toggle("clamp");
-    if (it.unread) {
-      it.unread = false;
-      readSet.add(it.key);
-      saveUiSet(UI_READ_KEY, readSet);
-      card.classList.remove("unread");
-      const pill = card.querySelector(".new-pill");
-      if (pill) pill.remove();
-      updateUnreadCount();
-    }
-  });
+  const markRead = () => {
+    if (!it.unread) return;
+    it.unread = false;
+    readSet.add(it.key);
+    saveUiSet(UI_READ_KEY, readSet);
+    card.classList.remove("unread");
+    const pill = card.querySelector(".new-pill");
+    if (pill) pill.remove();
+    updateUnreadCount();
+  };
+
+  // "Show more" expands in place; a click anywhere else opens the post in Teams.
+  if ((n.summary || n.subject || "").length > 150) {
+    const more = el("button", "more-btn inline", "Show more");
+    more.type = "button";
+    more.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const clamped = text.classList.toggle("clamp");
+      more.textContent = clamped ? "Show more" : "Show less";
+      markRead();
+    });
+    foot.prepend(more);
+  }
+  makeOpenable(card, `Open this post in Teams (${it.classLabel})`, () => { markRead(); openInTeams(postCommand(it)); });
   return card;
 }
 

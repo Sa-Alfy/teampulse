@@ -86,7 +86,15 @@ function chromeStub(seed) {
                 setBadgeBackgroundColor: () => Promise.resolve() },
       storage: { local: area(local, "local"), session: area(session, "session"),
                  onChanged: { addListener: (fn) => listeners.push(fn) } },
+      tabs: {
+        update: (id, o) => { window.__tabCalls.push(["update", id, o]); return Promise.resolve({ id, windowId: 3 }); },
+        create: (o) => { window.__tabCalls.push(["create", o.url]); return Promise.resolve({ id: 99, windowId: 3 }); },
+      },
+      windows: { update: (id, o) => { window.__tabCalls.push(["window", id, o]); return Promise.resolve({}); } },
     };
+    window.__tabCalls = [];
+    window.__closed = false;
+    window.close = () => { window.__closed = true; };
   })();`;
 }
 
@@ -290,6 +298,54 @@ async function runStudentUx(browser, runTest) {
     assert.ok(links.every((l) => l.href.startsWith("https:")), `non-https link: ${JSON.stringify(links)}`);
     assert.ok((await page.locator("#classList").textContent()).includes("http://plain.example/x"), "http URL should stay text");
     assert.deepStrictEqual(requests, [], "rendering links must not fetch anything");
+    await ctx.close();
+  });
+
+  await runTest("clicking an announcement stores an open-in-Teams command and switches to the Teams tab", async () => {
+    const { ctx, page, requests } = await openPopup(browser, uxSeed());
+    await page.waitForSelector("#feedContainer:not(.hidden)", { timeout: 5000 });
+    await page.click("#tabNotices");
+    await page.click(".notice-card .notice-when");
+    await page.waitForFunction(() => window.__closed === true, null, { timeout: 5000 });
+    const { cmd, calls, read } = await page.evaluate(() => ({
+      cmd: window.__local["tp:nav:cmd"], calls: window.__tabCalls, read: window.__local["tp:ui:read"] }));
+    assert.strictEqual(cmd.kind, "post");
+    assert.strictEqual(cmd.className, "Test CSE 312");
+    assert.ok(cmd.subject.startsWith("Exam "), `subject: ${cmd.subject}`);
+    assert.ok(cmd.id && typeof cmd.at === "number");
+    assert.deepStrictEqual(calls[0], ["update", 7, { active: true }], "should focus the known Teams tab");
+    assert.deepStrictEqual(calls[1], ["window", 3, { focused: true }]);
+    assert.strictEqual(read.length, 1, "opening counts as reading");
+    assert.deepStrictEqual(requests, []);
+    await ctx.close();
+  });
+
+  await runTest("clicking a task opens it in Teams; the done box doesn't", async () => {
+    const seed = uxSeed();
+    seed["tp:v1:assignments:Test MAT 103"][1].assignmentId = "aabb1234-5678-1234-abcd-ef0123456789";
+    const { ctx, page } = await openPopup(browser, seed);
+    await page.waitForSelector("#feedContainer:not(.hidden)", { timeout: 5000 });
+    await page.click("#tabAssignments");
+    await page.locator(".agenda-row", { hasText: "Old lab" }).locator(".done-box").click();
+    await page.waitForTimeout(300);
+    assert.strictEqual(await page.evaluate(() => window.__local["tp:nav:cmd"]), undefined, "done box opened Teams");
+
+    await page.locator(".agenda-row", { hasText: "Essay" }).locator(".row-title").click();
+    await page.waitForFunction(() => window.__closed === true, null, { timeout: 5000 });
+    const cmd = await page.evaluate(() => window.__local["tp:nav:cmd"]);
+    assert.deepStrictEqual(
+      { kind: cmd.kind, className: cmd.className, classShort: cmd.classShort, tab: cmd.tab, title: cmd.title, assignmentId: cmd.assignmentId },
+      { kind: "task", className: "Test MAT 103", classShort: "MAT 103", tab: "Upcoming", title: "Essay", assignmentId: "aabb1234-5678-1234-abcd-ef0123456789" });
+    await ctx.close();
+  });
+
+  await runTest("no known Teams tab → opens Teams in a new tab", async () => {
+    const { ctx, page } = await openPopup(browser, uxSeed());
+    await page.waitForSelector("#feedContainer:not(.hidden)", { timeout: 5000 });
+    await page.evaluate(() => { delete window.__session["tp:tabctx:7"]; });
+    await page.locator(".agenda-row", { hasText: "Essay" }).click();
+    await page.waitForFunction(() => window.__closed === true, null, { timeout: 5000 });
+    assert.deepStrictEqual(await page.evaluate(() => window.__tabCalls), [["create", "https://teams.cloud.microsoft/"]]);
     await ctx.close();
   });
 

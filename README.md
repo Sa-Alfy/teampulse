@@ -3,7 +3,7 @@
 > **Turn chaotic Microsoft Teams courses into a clean, automated academic briefing.**  
 > Scrapes classes, tracks assignments, extracts Class Test (CT) dates, and delivers a unified daily digest — showing only what's **new since the last run**.
 > 
-> **Status (2026-10-03, [v0.7.0 pre-release](https://github.com/Sa-Alfy/teampulse/releases/tag/v0.7.0)):** the browser extension works on its own — no server, no Node.js. Live capture of channel posts and "Sync all classes" have been confirmed working on `teams.cloud.microsoft` by the owner (one student account). Assignment capture was reworked in v0.6.4–0.6.7 (see [CHANGELOG](CHANGELOG.md)): on real Teams (one student account) a v0.6.5 capture was accepted with Past due items listed, while the v0.6.6–0.6.7 fixes are tested only against local mock pages. Not on the Chrome Web Store.
+> **Status (2026-10-03, [v0.7.1 pre-release](https://github.com/Sa-Alfy/teampulse/releases/tag/v0.7.1)):** the browser extension works on its own — no server, no Node.js. Live capture of channel posts and "Sync all classes" have been confirmed working on `teams.cloud.microsoft` by the owner (one student account). Assignment capture was reworked in v0.6.4–0.6.7 (see [CHANGELOG](CHANGELOG.md)): on real Teams (one student account) a v0.6.5 capture was accepted with Past due items listed, while the v0.6.6–0.6.7 fixes are tested only against local mock pages. Not on the Chrome Web Store.
 
 ---
 
@@ -214,6 +214,7 @@ Since v0.7.0 (see [CHANGELOG](CHANGELOG.md)):
 * ✅ **Tasks**: open assignments by due date. Tick one to mark it done; this hides it in TeamsPulse only and does not change Teams.
 * 📢 **Updates**: announcements newest first, grouped by day, with unread marks and **Mark all as read**.
 * 🎨 **Class chips**: one colour per course; tap to filter every tab. 🔍 search is in the header.
+* 👆 **Open in Teams**: click any card to jump to it. Announcements open the class and scroll to the post; assignments open the Assignments app at that card. (Mock-tested; not yet verified on real Teams.)
 * 🔗 **Links**: `https://` links in posts open in a new tab when clicked; nothing is loaded before that.
 * 🟢 **Fresh / Stale pill**: "Data is old" banner after 36 h without a capture.
 * 🔄 **Sync** in the header; **Auto-sync** under ⚙; **Clear stored data** in the footer.

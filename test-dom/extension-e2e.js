@@ -166,6 +166,25 @@ async function main() {
       await popup.close();
     });
 
+    // Real chrome.tabs / chrome.windows with the shipped permissions (no "tabs"):
+    // the popup page is in front, so the Teams tab is hidden until the popup
+    // switches to it; the content script then runs the pending command.
+    await run("clicking an announcement switches to the Teams tab and outlines the post", async () => {
+      const popup = await context.newPage();
+      await popup.goto(`chrome-extension://${extId}/popup.html`);
+      await popup.waitForSelector("#feedContainer:not(.hidden)", { timeout: 10000 });
+      await popup.bringToFront();
+      await popup.click("#tabNotices");
+      await popup.locator(".notice-card", { hasText: "Lab Cancelled" }).click();
+      await waitFor(() => teams.evaluate(() => document.visibilityState === "visible"), 10000, "Teams tab in front");
+      await waitFor(() => teams.evaluate(() => {
+        const m = Array.from(document.querySelectorAll('[data-tid="channel-pane-message"]'))
+          .find((x) => /Lab Cancelled/.test(x.textContent));
+        return m && m.style.outline.includes("solid");
+      }), 10000, "post outlined");
+      if (!popup.isClosed()) await popup.close();
+    });
+
     await run("no page errors from the content scripts", async () => {
       assert.deepStrictEqual(errors, []);
     });

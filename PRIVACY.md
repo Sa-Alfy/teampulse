@@ -1,8 +1,8 @@
 # Privacy Policy — TeamsPulse browser extension
 
-_Last updated: 2026-10-03 · applies to extension version 0.7.0_
+_Last updated: 2026-10-03 · applies to extension version 0.7.1_
 
-**What it reads.** While you have Microsoft Teams open (`teams.microsoft.com`, `teams.cloud.microsoft`) and its assignments frame (`assignments.edu.cloud.microsoft`), the extension reads what those pages show: class names, channel posts (author name, subject, text, timestamp, attachment names) and assignment titles, due dates and status. It reads nothing on any other website. "Sync all classes" opens your own classes and the Teams Assignments app in your own Teams tab — when you click it, and (unless you untick **Auto-sync** under ⚙ in the popup) once automatically when Teams opens, at most every 6 hours.
+**What it reads.** While you have Microsoft Teams open (`teams.microsoft.com`, `teams.cloud.microsoft`) and its assignments frame (`assignments.edu.cloud.microsoft`), the extension reads what those pages show: class names, channel posts (author name, subject, text, timestamp, attachment names) and assignment titles, due dates and status. It reads nothing on any other website. "Sync all classes" opens your own classes and the Teams Assignments app in your own Teams tab — when you click it, and (unless you untick **Auto-sync** under ⚙ in the popup) once automatically when Teams opens, at most every 6 hours. Clicking a card in the popup opens that class or the Assignments app in your Teams tab (or opens Teams in a new tab), the same way.
 
 **Where it is stored.** Only in your browser's extension storage (`chrome.storage.local`) on your device. A temporary per-tab note of the open class is kept in session storage and is discarded when the tab closes. Which assignments you tick as done and which announcements you have read are kept in that same extension storage on your device.
 

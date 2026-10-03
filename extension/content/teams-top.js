@@ -523,6 +523,141 @@
     }, { once: true });
   }, AUTO_SYNC_DELAY_MS);
 
+  // ── Open in Teams (user clicked a card in the popup) ───────────────────────
+  // The popup stores { id, kind, className, at, … } under NAV_CMD_KEY, then
+  // brings this tab to the front. Only a visible tab acts; a command that
+  // arrives while hidden (or before a fresh tab has loaded) runs once the tab
+  // is shown, if still recent. Posts are found with extractPosts() — the same
+  // reading the capture uses — so no extra selectors are involved.
+  //   kind "post": open the class like Sync does, find the post by its
+  //                timestamp + subject/body start, scroll to it, outline it.
+  //   kind "task": open the Assignments app; its frame script finds the card.
+
+  const NAV_CMD_KEY     = "tp:nav:cmd";
+  const NAV_MAX_AGE_MS  = 120_000;
+  const NAV_LOAD_OLDER  = 8;       // scroll-to-top rounds to load older posts
+  const NAV_OLDER_WAIT  = 1_200;
+
+  let _navHandled = null;  // id of the last command acted on
+  let _navPending = null;
+  let _navBusy    = false;
+
+  function navFresh(cmd) {
+    return cmd && cmd.id && cmd.id !== _navHandled && Date.now() - (Number(cmd.at) || 0) < NAV_MAX_AGE_MS;
+  }
+
+  /** Small, self-removing notice on the Teams page (text only). */
+  function navToast(text) {
+    try {
+      const el = document.createElement("div");
+      el.textContent = `TeamsPulse: ${text}`;
+      el.setAttribute("role", "status");
+      Object.assign(el.style, {
+        position: "fixed", bottom: "24px", left: "50%", transform: "translateX(-50%)",
+        zIndex: "2147483647", background: "#1f2330", color: "#eef1f6", padding: "8px 14px",
+        borderRadius: "8px", font: "13px/1.4 Segoe UI, sans-serif", boxShadow: "0 4px 16px rgba(0,0,0,.35)",
+        maxWidth: "420px", textAlign: "center",
+      });
+      document.body.appendChild(el);
+      setTimeout(() => el.remove(), 5000);
+    } catch (_) { /* page not ready */ }
+  }
+
+  function flash(el) {
+    const prev = { outline: el.style.outline, outlineOffset: el.style.outlineOffset };
+    el.style.outline = "3px solid #818cf8";
+    el.style.outlineOffset = "2px";
+    setTimeout(() => { el.style.outline = prev.outline; el.style.outlineOffset = prev.outlineOffset; }, 3500);
+  }
+
+  /** Index of the message matching the command, or -1. */
+  function findPostIndex(cmd, className) {
+    const posts = extractPosts(className);
+    const subject = normWs(cmd.subject || "").toLowerCase();
+    const bodyStart = normWs(cmd.bodyStart || "").toLowerCase();
+    const textOk = (p) =>
+      (subject && normWs(p.subject || "").toLowerCase() === subject) ||
+      (bodyStart && normWs(p.body || "").toLowerCase().startsWith(bodyStart));
+    // Timestamp + text first; text alone if Teams re-rendered the timestamp.
+    let idx = cmd.timestampIso ? posts.findIndex((p) => p.timestampIso === cmd.timestampIso && textOk(p)) : -1;
+    if (idx < 0) idx = posts.findIndex(textOk);
+    return idx;
+  }
+
+  async function openClass(className) {
+    if (getCurrentClassName() === className) return true;
+    if (!(await goToGrid())) return false;
+    const btn = classButtons().find((b) => normWs(b.textContent || "") === className);
+    if (!btn) return false;
+    btn.click();
+    return waitFor(
+      () => getCurrentClassName() === className && document.querySelectorAll(MESSAGE_SELECTOR).length > 0,
+      NAV_TIMEOUT_MS
+    );
+  }
+
+  async function navigateToPost(cmd) {
+    if (!(await openClass(cmd.className))) {
+      navToast("couldn't open that class. Open it from your Teams list.");
+      return;
+    }
+    await sleep(800);
+    let idx = findPostIndex(cmd, cmd.className);
+    // Older posts load when the list is scrolled to its top.
+    for (let round = 0; idx < 0 && round < NAV_LOAD_OLDER && !_dead; round++) {
+      const first = document.querySelector(MESSAGE_SELECTOR);
+      if (!first) break;
+      first.scrollIntoView({ block: "start" });
+      await sleep(NAV_OLDER_WAIT);
+      idx = findPostIndex(cmd, cmd.className);
+    }
+    const msg = idx >= 0 ? document.querySelectorAll(MESSAGE_SELECTOR)[idx] : null;
+    if (!msg) {
+      navToast("opened the class, but couldn't find that post. It may be further up.");
+      return;
+    }
+    msg.scrollIntoView({ block: "center", behavior: "smooth" });
+    flash(msg);
+  }
+
+  async function navigateToTask() {
+    const btn = assignmentsAppButton();
+    if (!btn) {
+      navToast("couldn't find the Assignments app button in Teams.");
+      return;
+    }
+    btn.click(); // the frame script picks the command up and finds the card
+  }
+
+  async function runNav(cmd) {
+    if (!navFresh(cmd) || _dead) return;
+    if (document.visibilityState !== "visible") { _navPending = cmd; return; }
+    if (_syncing || _navBusy) { navToast("busy syncing, try again in a moment."); return; }
+    _navHandled = cmd.id;
+    _navPending = null;
+    _navBusy = true;
+    try {
+      if (cmd.kind === "post" && cmd.className) await navigateToPost(cmd);
+      else if (cmd.kind === "task") await navigateToTask(cmd);
+    } catch (_) {
+      navToast("couldn't open that item.");
+    } finally {
+      _navBusy = false;
+    }
+  }
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && _navPending) runNav(_navPending);
+  });
+
+  // A tab opened by the popup (no Teams tab was known) finds its command here.
+  try {
+    chrome.storage.local.get([NAV_CMD_KEY], (res) => {
+      const cmd = res && res[NAV_CMD_KEY];
+      if (navFresh(cmd)) setTimeout(() => runNav(cmd), 3000);
+    });
+  } catch (_) { /* storage unavailable in this context */ }
+
   // ── Storage listener: Clear-data resend + sync command ─────────────────────
   // The store never deletes tp:v1:* keys except on clearAll, so a removal means
   // the user wiped data: forget what was sent so the open channel is re-captured.
@@ -535,6 +670,8 @@
       if (cmd && cmd.newValue && document.visibilityState === "visible") {
         syncAllClasses();
       }
+      const nav = changes[NAV_CMD_KEY];
+      if (nav && nav.newValue) runNav(nav.newValue);
       // The assignments frame stored a non-empty capture → release a waiting
       // sync. (An empty write is not proof of a capture — live: "+ assignments"
       // with 0 tasks.)
