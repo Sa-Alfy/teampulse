@@ -33,7 +33,11 @@
 const TABS            = ["Upcoming", "Past due", "Completed"];
 const COOLDOWN_MS     = 60_000;   // at most once per 60 s
 const WAIT_TIMEOUT_MS = 10_000;
+const TAB_SELECT_MS   = 8_000;
+const CHANGE_WAIT_MS  = 15_000;   // previous tab's list replaced
 const SETTLE_MS       = 400;      // brief settle after tab becomes active
+const EMPTY_RE        = /\bno assignments\b/i; // empty-state text (seen live)
+const MAX_SEND        = 300;      // = messages.js MAX_ASSIGNMENTS
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -102,17 +106,6 @@ function selectedTabName() {
   return null;
 }
 
-/**
- * True once the tab panel has settled: either assignment-card elements are
- * present, or the "No assignments" empty-state text is visible.
- * @returns {boolean}
- */
-function panelSettled() {
-  if (document.querySelector('[data-test="assignment-card"]')) return true;
-  const body = document.body.innerText || "";
-  return body.includes("No assignments");
-}
-
 /** Pull a GUID out of a card's id attribute. */
 function extractGuid(rawId) {
   if (!rawId) return null;
@@ -120,20 +113,11 @@ function extractGuid(rawId) {
   return m ? m[0] : null;
 }
 
-/**
- * Extract cards currently visible in the active tab panel.
- * Only takes elements that are actually rendered (offsetParent !== null or
- * getComputedStyle check) — in the real Teams DOM the inactive tabs' cards are
- * unmounted; in test fixtures the inactive panels are hidden with display:none.
- *
- * @param {string} tabName
- * @returns {object[]}
- */
+// The old "panel settled" / "list loaded" checks matched "No assignments"
+// anywhere in the body, including the previous tab's empty state still on
+// screen, so the next tab was read before its list arrived (zero cards).
+// listChanged()/listLoadedSince() below compare against the pre-switch list.
 const LIST_LOAD_TIMEOUT_MS = 20_000;
-
-function listLoaded() {
-  return visibleCards().length > 0 || /\bno assignments\b/i.test(document.body.innerText || "");
-}
 const SCROLL_SETTLE_MS  = 400;
 const MAX_SCROLL_STEPS  = 120;
 
@@ -154,12 +138,18 @@ function scrollContainer() {
  * (live: 13 of many past-due cards captured). Scroll through it, collecting
  * as we go, then put the scroll position back.
  */
-async function collectAllCards(tabName) {
+async function collectAllCards(tabName, tr) {
   const byKey = new Map();
+  const seen = { raw: new Set(), hidden: new Set(), relative: new Set() };
   const grab = () => {
-    for (const c of extractCards(tabName)) {
+    for (const c of extractCards(tabName, seen)) {
       const k = c.assignmentId || c.rawId || `${c.title}|${c.dueRaw}`;
       if (!byKey.has(k)) byKey.set(k, c);
+    }
+    if (tr) {
+      tr.cardsRaw = seen.raw.size;
+      tr.droppedHidden = [...seen.hidden].filter((k) => !seen.relative.has(k)).length;
+      tr.droppedByRelativeFilter = seen.relative.size;
     }
   };
   grab();
@@ -186,20 +176,34 @@ function visibleCards() {
     .filter((el) => el.getClientRects().length > 0);
 }
 
-function visibleCardIds() {
-  return new Set(visibleCards().map((el) => el.getAttribute("id") || el.textContent));
-}
-
 function sameIds(a, b) {
   if (a.size !== b.size) return false;
   for (const x of a) if (!b.has(x)) return false;
   return true;
 }
 
-function extractCards(tabName) {
+/** Text of an element with its child blocks kept apart ("Due at 11:59 PM · CSE 204"). */
+function splitText(el) {
+  const parts = [];
+  const walker = el.ownerDocument.createTreeWalker(el, 4 /* SHOW_TEXT */);
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    const t = (n.textContent || "").replace(/[\s\u00a0]+/g, " ").trim();
+    if (t) parts.push(t);
+  }
+  return parts.join(" · ");
+}
+
+function extractCards(tabName, seen) {
   // Visible cards only. Never fall back to hidden ones: those belong to
-  // another tab and would be recorded under the wrong tab name.
-  const targetCards = visibleCards();
+  // another tab and would be recorded under the wrong tab name. (Only called
+  // when the document is rendered, so "hidden" really means hidden.)
+  const keyOf = (el) => el.getAttribute("id") || el.textContent;
+  const targetCards = [];
+  for (const el of document.querySelectorAll('[data-test="assignment-card"]')) {
+    const shown = el.getClientRects().length > 0;
+    if (shown) targetCards.push(el);
+    if (seen) { seen.raw.add(keyOf(el)); if (!shown) seen.hidden.add(keyOf(el)); }
+  }
   const results = [];
 
   for (const card of targetCards) {
@@ -209,7 +213,7 @@ function extractCards(tabName) {
     const actionEl = card.querySelector(".fui-CardHeader__action");
 
     const title  = titleEl  ? (titleEl.textContent  || "").trim() : "";
-    const desc   = descEl   ? (descEl.textContent   || "").trim() : "";
+    const desc   = descEl   ? splitText(descEl) : "";
     const action = actionEl ? (actionEl.textContent || "").trim() : "";
     const allUp  = allUpParts(card, title);
     const { date: groupDate, relative } = groupHeader(card);
@@ -217,8 +221,11 @@ function extractCards(tabName) {
     // The header's relative text says which side of today the date is on.
     // It also catches stale cards: a "… ago" card is never Upcoming, and a
     // "Due in …" card is never Past due (live: past-due cards read as Upcoming).
-    if (tabName === "Upcoming" && /\bago\b/i.test(relative)) continue;
-    if (tabName === "Past due" && /\bdue in\b/i.test(relative)) continue;
+    if ((tabName === "Upcoming" && /\bago\b/i.test(relative)) ||
+        (tabName === "Past due" && /\bdue in\b/i.test(relative))) {
+      if (seen) seen.relative.add(keyOf(card));
+      continue;
+    }
 
     const rawId    = card.getAttribute("id")      || null;
     const dataId   = card.getAttribute("data-id") || null;
@@ -250,8 +257,10 @@ function extractCards(tabName) {
       dueDate,      // null → resolved by shape layer (extractDate)
       status:       action,
     };
-    // All-classes view: each card names its own class.
-    if (allUp.className && isAllClassesView()) item.className = allUp.className;
+    // A card that names its own class is filed there, not under the class
+    // whose tab is open (live: every card was filed under CSE 304). The
+    // background validates it against known classes.
+    if (allUp.className) item.className = allUp.className;
     results.push(item);
   }
 
@@ -311,13 +320,17 @@ function groupHeader(card) {
 
 /**
  * "Aug 31st" (+ optional year) / Today / Tomorrow / Yesterday → "YYYY-MM-DD".
- * Without a year: Upcoming → next occurrence; Past due / Completed → most
- * recent past occurrence. Returns null if the text isn't a date.
+ * Without a year, pick the year that puts the date closest to today, on the
+ * side of today the header's relative text says ("Due … ago" past, "Due in …"
+ * future), else the side the tab implies (Past due past, Upcoming future,
+ * Completed either). Returns null if the text isn't a date.
  */
 function inferDueDate(text, tabName, now, relative = "") {
-  // "Due 7 months ago" → past; "Due in 3 days" → future; otherwise by tab.
-  if (/\bago\b/i.test(relative)) tabName = "Past due";
-  else if (/\bdue in\b/i.test(relative)) tabName = "Upcoming";
+  let side = 0; // -1 past, +1 future, 0 either
+  if (/\bago\b/i.test(relative)) side = -1;
+  else if (/\bdue in\b/i.test(relative)) side = 1;
+  else if (tabName === "Past due") side = -1;
+  else if (tabName === "Upcoming") side = 1;
   const pad = (n) => String(n).padStart(2, "0");
   const fmt = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -330,131 +343,298 @@ function inferDueDate(text, tabName, now, relative = "") {
   const day = parseInt(m[2], 10);
   if (month === undefined) return null;
 
-  let year = m[3] ? parseInt(m[3], 10) : today.getFullYear();
-  let d = new Date(year, month, day);
-  if (d.getMonth() !== month) return null; // e.g. Feb 30
-  if (!m[3]) {
-    const DAY = 864e5;
-    if (tabName === "Upcoming" && d < today - DAY) d = new Date(++year, month, day);
-    else if (tabName !== "Upcoming" && d > +today + DAY) d = new Date(--year, month, day);
+  if (m[3]) {
+    const d = new Date(parseInt(m[3], 10), month, day);
+    return d.getMonth() === month ? fmt(d) : null; // e.g. Feb 30
   }
-  return fmt(d);
+  const DAY = 864e5;
+  let best = null;
+  for (const y of [today.getFullYear() - 1, today.getFullYear(), today.getFullYear() + 1]) {
+    const d = new Date(y, month, day);
+    if (d.getMonth() !== month) continue;
+    if (side < 0 && d > +today + DAY) continue;
+    if (side > 0 && d < today - DAY) continue;
+    if (!best || Math.abs(d - today) < Math.abs(best - today)) best = d;
+  }
+  return best ? fmt(best) : null;
 }
 
-// ── Throttle state ─────────────────────────────────────────────────────────
+// ── Capture report ─────────────────────────────────────────────────────────
+// Every run (including every early return) produces a report that travels
+// with TP_ASSIGNMENTS and is stored as tp:v1:capture-report. Numbers, flags
+// and fixed reason codes only: never titles or class names.
 
-let _lastRunMs = 0;
+function newTabReport(tab) {
+  return {
+    tab, tabFound: false, clicked: false, selectedConfirmed: false,
+    cardsChangedConfirmed: false, listLoaded: false, cardsRaw: 0,
+    droppedHidden: 0, droppedStale: 0, droppedByRelativeFilter: 0,
+    dedupedOut: 0, kept: 0, status: "skipped", reason: "",
+  };
+}
 
-// ── Main scrape routine ────────────────────────────────────────────────────
-
-async function scrape() {
-  const now = Date.now();
-  if (now - _lastRunMs < COOLDOWN_MS) return;
-  _lastRunMs = now;
-
-  // Wait for the iframe to show at least one recognisable element.
-  const ready = await waitFor(
-    () => document.querySelector('[data-test="assignment-card"], [data-test="Upcoming"], [data-test="Past due"], [data-test="Completed"]') ||
-          (document.body && (document.body.innerText || "").includes("No assignments in this class yet")),
-    20_000
-  );
-  if (!ready) return;  // iframe never resolved — drop silently
-
-  // Record which tab is originally selected so we can restore it.
-  const originalTab = selectedTabName();
-
-  const assignments = [];
-  const seenIds = new Set();
-
-  for (const tabName of TABS) {
-    const tabEl = findTabEl(tabName);
-    if (!tabEl) continue;
-
-    // Teams keeps the previous tab's cards on screen for a moment after a tab
-    // switch; reading then mislabels them (live: 23 past-due cards were also
-    // recorded as "Upcoming"). Remember what was shown before switching.
-    const wasSelected = selectedTabName() === tabName;
-    const before = visibleCardIds();
-
-    // Click the tab (the ONLY click performed by this script).
-    tabEl.click();
-
-    // 1. Wait for the tab to report aria-selected="true".
-    await waitFor(
-      () => {
-        const el = document.querySelector(`[data-test="${tabName}"][aria-selected="true"]`);
-        return !!el;
-      },
-      8_000
-    );
-
-    // 2. Wait for the panel to settle (cards or empty text) AND, after a real
-    //    switch, for the visible cards to differ from the previous tab's.
-    //    An assignment is only ever in one tab, so an unchanged non-empty set
-    //    means stale content: skip the tab rather than mislabel it.
-    await waitFor(panelSettled, WAIT_TIMEOUT_MS);
-    if (!wasSelected && before.size > 0) {
-      const changed = await waitFor(() => !sameIds(visibleCardIds(), before), WAIT_TIMEOUT_MS);
-      if (!changed) {
-        console.warn(`[TeamsPulse] "${tabName}" still showed the previous tab's cards; skipped`);
-        continue;
-      }
-    }
-    // The list is fetched over the network after a switch (live: reading after
-    // 4 s found an empty screen and stored nothing). Wait for cards or the
-    // empty-state text before reading.
-    await waitFor(listLoaded, LIST_LOAD_TIMEOUT_MS);
-
-    // Brief extra settle to let React flush.
-    await new Promise((r) => setTimeout(r, SETTLE_MS));
-
-    // 3. Extract cards (an assignment is recorded once, under its first tab).
-    for (const c of await collectAllCards(tabName)) {
-      const id = c.assignmentId || c.rawId;
-      if (id && seenIds.has(id)) continue;
-      if (id) seenIds.add(id);
-      assignments.push(c);
-    }
-  }
-
-  // Restore the originally selected tab.
-  if (originalTab && originalTab !== selectedTabName()) {
-    const restoreEl = findTabEl(originalTab);
-    if (restoreEl) restoreEl.click();
-  }
-
-  // Send regardless of whether assignments is empty (the background validates).
-  sendAssignments({
-    type: "TP_ASSIGNMENTS",
-    assignments,
-    scope: isAllClassesView() ? "all-classes" : "class",
-    scrapedAt: new Date().toISOString(),
-  }, 2);
+function newReport(trigger) {
+  return {
+    version: 1,
+    startedAt: new Date().toISOString(),
+    trigger,
+    scope: null,
+    readyWaitResult: null,
+    documentHidden: !!document.hidden,
+    rendered: documentRendered(),
+    status: null,
+    reason: "",
+    tabs: [],
+  };
 }
 
 /**
- * Send with a short retry: the background rejects assignments until the top
- * frame's TP_CLASS_CONTEXT has landed, which can race this iframe's load.
- * Stops silently if the extension was reloaded under this page.
+ * True when this document is laid out and on screen. A display:none iframe
+ * (Teams keeps app frames alive while another app is shown) has no layout:
+ * every card then has zero client rects and would be dropped as hidden.
  */
-function sendAssignments(msg, retriesLeft) {
+function documentRendered() {
+  if (document.hidden) return false;
+  if (!(window.innerWidth > 0 && window.innerHeight > 0)) return false;
+  return document.documentElement.getClientRects().length > 0;
+}
+
+// ── List state (for detecting a real tab switch) ───────────────────────────
+
+/** Visible "No assignments" empty-state element, if any. */
+function emptyStateEl() {
+  const root = document.querySelector('[data-test="assignment-list"]') || document.body;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    if (EMPTY_RE.test(n.textContent || "")) {
+      const el = n.parentElement;
+      if (el && el.getClientRects().length > 0) return el;
+    }
+  }
+  return null;
+}
+
+/** What the list currently shows: visible card ids + nodes, and the empty state. */
+function listState() {
+  const cards = visibleCards();
+  return {
+    ids: new Set(cards.map((el) => el.getAttribute("id") || el.textContent)),
+    nodes: cards,
+    empty: emptyStateEl(),
+  };
+}
+
+/**
+ * The list on screen is no longer the one captured in `before`: card ids
+ * differ, or the previous nodes / empty-state element were replaced.
+ */
+function listChanged(before) {
+  const now = listState();
+  if (!sameIds(now.ids, before.ids)) return true;
+  if (before.nodes.some((el) => !el.isConnected)) return true;
+  if (before.empty && !before.empty.isConnected) return true;
+  if (!before.empty && now.empty) return true;
+  return false;
+}
+
+/** Cards visible, or a visible empty state that was not on screen in `before`. */
+function listLoadedSince(before) {
+  if (visibleCards().length > 0) return true;
+  const e = emptyStateEl();
+  return !!e && (!before || e !== before.empty);
+}
+
+// ── Main scrape routine ────────────────────────────────────────────────────
+
+let _lastRunMs  = 0;
+let _running    = false;
+let _deferTimer = null;
+
+/**
+ * Entry for every trigger (load, in-frame navigation, frame shown).
+ * In-flight guard; 60 s cooldown between real runs (a trigger inside the
+ * cooldown runs when it ends); a hidden document is reported and skipped.
+ */
+function requestScrape(trigger) {
+  if (_running) return;
+  const wait = COOLDOWN_MS - (Date.now() - _lastRunMs);
+  if (_lastRunMs && wait > 0) {
+    if (!_deferTimer) _deferTimer = setTimeout(() => { _deferTimer = null; requestScrape(`${trigger}+cooldown`); }, wait);
+    return;
+  }
+  scrape(trigger).catch(() => { _running = false; });
+}
+
+async function scrape(trigger = "load") {
+  _running = true;
+  const report = newReport(trigger);
+  try {
+    if (!report.rendered) {
+      report.status = "deferred";
+      report.reason = document.hidden ? "document-hidden" : "frame-not-rendered";
+      sendReportOnly(report);
+      return;
+    }
+    _lastRunMs = Date.now();
+
+    // Wait for the iframe to show at least one recognisable element.
+    const ready = await waitFor(
+      () => document.querySelector('[data-test="assignment-card"], [data-test="Upcoming"], [data-test="Past due"], [data-test="Completed"]') ||
+            (document.body && (document.body.innerText || "").includes("No assignments in this class yet")),
+      20_000
+    );
+    report.readyWaitResult = ready ? "ready" : "timeout";
+    report.scope = isAllClassesView() ? "all-classes" : "class";
+    if (!ready) {
+      report.status = "failed";
+      report.reason = "ready-timeout";
+      sendReportOnly(report);
+      return;
+    }
+
+    const originalTab = selectedTabName();
+    // Read the tab already on screen first: no switch, so no stale list.
+    const order = originalTab ? [originalTab, ...TABS.filter((t) => t !== originalTab)] : TABS.slice();
+    const assignments = [];
+    const capturedTab = new Map(); // id → tab it was captured under
+
+    for (const tabName of order) {
+      const tr = newTabReport(tabName);
+      report.tabs.push(tr);
+      const tabEl = findTabEl(tabName);
+      if (!tabEl) { tr.reason = "tab-not-found"; continue; }
+      tr.tabFound = true;
+
+      const wasSelected = selectedTabName() === tabName;
+      const before = listState();
+      if (!wasSelected) { tabEl.click(); tr.clicked = true; }
+
+      tr.selectedConfirmed = !!(await waitFor(
+        () => document.querySelector(`[data-test="${tabName}"][aria-selected="true"]`), TAB_SELECT_MS));
+      if (!tr.selectedConfirmed) { tr.status = "timeout"; tr.reason = "tab-not-selected"; continue; }
+
+      // After a real switch Teams keeps the previous list on screen for a
+      // while (live: past-due cards recorded as Upcoming). Wait until it is
+      // replaced; a list that never changes is stale, not this tab's.
+      if (wasSelected || (before.ids.size === 0 && !before.empty)) {
+        tr.cardsChangedConfirmed = true;
+      } else {
+        tr.cardsChangedConfirmed = !!(await waitFor(() => listChanged(before), CHANGE_WAIT_MS));
+      }
+      if (!tr.cardsChangedConfirmed) {
+        // Two empty tabs in a row also look unchanged: not proof, so not "ok".
+        tr.reason = before.ids.size ? "previous-tab-cards-still-shown" : "empty-state-unchanged";
+        continue;
+      }
+
+      // The list is fetched after a switch: wait for cards or a fresh empty state.
+      tr.listLoaded = !!(await waitFor(() => listLoadedSince(wasSelected ? null : before), LIST_LOAD_TIMEOUT_MS));
+      if (!tr.listLoaded) { tr.status = "timeout"; tr.reason = "list-not-loaded"; continue; }
+      await new Promise((r) => setTimeout(r, SETTLE_MS));
+
+      // An assignment is in exactly one tab: a card that was on screen before
+      // the switch belongs to the previous tab.
+      const staleIds = wasSelected ? new Set() : before.ids;
+      for (const c of await collectAllCards(tabName, tr)) {
+        const id = c.assignmentId || c.rawId;
+        if (c.rawId && staleIds.has(c.rawId)) { tr.droppedStale++; continue; }
+        if (id && capturedTab.has(id)) { tr.dedupedOut++; continue; }
+        if (id) capturedTab.set(id, tabName);
+        assignments.push(c);
+        tr.kept++;
+      }
+      tr.status = "ok";
+    }
+
+    // Restore the originally selected tab.
+    if (originalTab && originalTab !== selectedTabName()) {
+      const restoreEl = findTabEl(originalTab);
+      if (restoreEl) restoreEl.click();
+    }
+
+    // The background accepts at most MAX_SEND items. Completed items are never
+    // shown, so drop them first (and keep the stored Completed list).
+    if (assignments.length > MAX_SEND) {
+      const tc = report.tabs.find((t) => t.tab === "Completed");
+      if (tc && tc.status === "ok") { tc.status = "skipped"; tc.reason = "over-cap"; }
+      for (let i = assignments.length - 1; i >= 0 && assignments.length > MAX_SEND; i--) {
+        if (assignments[i].tab === "Completed") assignments.splice(i, 1);
+      }
+    }
+
+    const okTabs = report.tabs.filter((t) => t.status === "ok").map((t) => t.tab);
+    report.status = okTabs.length === TABS.length ? "ok" : okTabs.length ? "partial" : "failed";
+    if (!okTabs.length) report.reason = report.tabs.every((t) => !t.tabFound) ? "no-tabs-found" : "no-tab-confirmed";
+    send({
+      type: "TP_ASSIGNMENTS",
+      assignments,
+      okTabs,
+      scope: report.scope,
+      scrapedAt: new Date().toISOString(),
+      report,
+    }, 2);
+  } finally {
+    _running = false;
+  }
+}
+
+/** A run that captured nothing still reports why (the background stores no items). */
+function sendReportOnly(report) {
+  send({
+    type: "TP_ASSIGNMENTS",
+    assignments: [],
+    okTabs: [],
+    scope: report.scope || (isAllClassesView() ? "all-classes" : "class"),
+    scrapedAt: new Date().toISOString(),
+    report,
+  }, 0);
+}
+
+/**
+ * Send with a short retry: the background rejects class-scope assignments
+ * until the top frame's TP_CLASS_CONTEXT has landed, which can race this
+ * iframe's load. Stops silently if the extension was reloaded under this page.
+ */
+function send(msg, retriesLeft) {
   try {
     if (!(chrome.runtime && chrome.runtime.id)) return;
     chrome.runtime.sendMessage(msg, (res) => {
       let err = null;
       try { err = chrome.runtime.lastError; } catch (_) { /* context gone */ }
       if (!err && res && res.ok) return;
-      console.warn(`[TeamsPulse] TP_ASSIGNMENTS not stored: ${err ? err.message : (res && res.reason) || "no response"}`);
-      if (retriesLeft > 0) setTimeout(() => sendAssignments(msg, retriesLeft - 1), 3000);
+      const reason = err ? err.message : (res && res.reason) || "no response";
+      console.warn(`[TeamsPulse] TP_ASSIGNMENTS not stored: ${reason}`);
+      if (retriesLeft > 0 && /class context/i.test(reason)) setTimeout(() => send(msg, retriesLeft - 1), 3000);
     });
   } catch (_) { /* extension context invalidated */ }
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────
+// Runs on load, and again when the app navigates inside the frame (SPA
+// route/hash change), when the Teams tab becomes visible, or when a hidden
+// frame is shown (Teams keeps app frames alive instead of reloading them).
 
-// Run once on load (after DOM is interactive).
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", () => scrape());
-} else {
-  scrape();
+if (typeof module === "undefined") {
+  let lastHref = location.href;
+  let wasRendered = documentRendered();
+  const recheck = (why) => {
+    const rendered = documentRendered();
+    if (location.href !== lastHref) { lastHref = location.href; if (rendered) requestScrape("navigation"); }
+    else if (rendered && !wasRendered) requestScrape(why);
+    wasRendered = rendered;
+  };
+  setInterval(() => recheck("frame-shown"), 2000);
+  window.addEventListener("resize", () => recheck("frame-shown"));
+  window.addEventListener("popstate", () => recheck("navigation"));
+  window.addEventListener("hashchange", () => recheck("navigation"));
+  document.addEventListener("visibilitychange", () => recheck("tab-visible"));
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => requestScrape("load"));
+  } else {
+    requestScrape("load");
+  }
+} else if (module.exports) {
+  // Node (unit tests): pure helpers only.
+  module.exports = { inferDueDate, allUpParts, splitText, TABS };
 }
