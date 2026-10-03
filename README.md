@@ -3,7 +3,7 @@
 > **Turn chaotic Microsoft Teams courses into a clean, automated academic briefing.**  
 > Scrapes classes, tracks assignments, extracts Class Test (CT) dates, and delivers a unified daily digest — showing only what's **new since the last run**.
 > 
-> **Status (2026-10-03, v0.6.5, not yet released; latest release [v0.6.3](https://github.com/Sa-Alfy/teampulse/releases/tag/v0.6.3)):** the browser extension works on its own — no server, no Node.js. Live capture of channel posts and "Sync all classes" have been confirmed working on `teams.cloud.microsoft` by the owner (one student account). Assignment capture was reworked in v0.6.4–0.6.5 (see [CHANGELOG](CHANGELOG.md)) and is **unverified on real Teams** (tested only against local mock pages). Not on the Chrome Web Store.
+> **Status (2026-10-03, v0.6.6, not yet released; latest release [v0.6.3](https://github.com/Sa-Alfy/teampulse/releases/tag/v0.6.3)):** the browser extension works on its own — no server, no Node.js. Live capture of channel posts and "Sync all classes" have been confirmed working on `teams.cloud.microsoft` by the owner (one student account). Assignment capture was reworked in v0.6.4–0.6.6 (see [CHANGELOG](CHANGELOG.md)) and is **unverified on real Teams** (tested only against local mock pages). Not on the Chrome Web Store.
 
 ---
 

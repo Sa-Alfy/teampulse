@@ -600,6 +600,11 @@ async function main() {
     }],
     ["live: opens on Upcoming showing Past due's list, switches itself (3 s) → all captured", "live: opens on Upcoming showing Past due, self-switches 3s", clean],
     ["live: same, switch after 300 ms → all captured", "live: self-switch 300ms", clean],
+    ["live: empty Upcoming redirects to Completed → Completed not filed as Upcoming", "live: empty Upcoming redirects to Completed (1.5s)", (r) => {
+      assert.strictEqual(r.wrongTab + r.dup + r.missing + r.wrongDate + r.wrongClass, 0, JSON.stringify(r.msg.report.tabs));
+      assert.strictEqual(r.status, "partial");
+      assert.strictEqual(r.reasons, "tab-switched-away");
+    }],
     ["tabs missing (DOM drift) → 'failed' report with reason, no okTabs", "tabs missing (DOM drift)", (r) => {
       assert.strictEqual(r.status, "failed");
       assert.strictEqual(r.reasons, "no-tabs-found");

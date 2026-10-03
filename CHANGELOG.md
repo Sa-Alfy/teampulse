@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.6 (unreleased): completed assignments shown as Upcoming
+
+Live 0.6.5 report (2026-10-03): accepted, 33 cards. Upcoming kept 10 cards, and Completed then de-duplicated the same 10.
+
+- **Fixed:** clicking an empty Upcoming makes Teams show the Completed list while Upcoming still reads selected, then select Completed. A tab's read is now kept only if that tab is still selected afterwards. Otherwise it is `tab-switched-away` and retried once. Reproduced offline: v0.6.5 files 2 Completed cards as Upcoming, v0.6.6 none. **Unverified on real Teams.**
+- Upcoming is then not confirmed (partial status), so stored Upcoming items are kept, not cleared. An item that moves to another tab is replaced by its id.
+
 ## 0.6.5 (unreleased): fixes from the owner's first live 0.6.4 capture report
 
 Live report (2026-10-03): status ok, 33 cards sent, **rejected by the background**: "all-classes assignments must carry className". Upcoming read 23 cards, all dropped by the relative-text filter, but was still marked ok.

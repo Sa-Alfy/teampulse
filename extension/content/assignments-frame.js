@@ -543,7 +543,18 @@ async function scrape(trigger = "load") {
       // An assignment is in exactly one tab: a card that was on screen before
       // the switch belongs to the previous tab.
       const staleIds = wasSelected || trustScreen ? new Set() : before.ids;
-      for (const c of await collectAllCards(tabName, tr)) {
+      const cards = await collectAllCards(tabName, tr);
+      // Teams can move off a tab by itself right after selecting it (live
+      // 2026-10-03: clicking an empty Upcoming switched to Completed, whose
+      // cards were then read as Upcoming). Keep the read only if the tab is
+      // still selected afterwards.
+      await new Promise((r) => setTimeout(r, SETTLE_MS));
+      if (selectedTabName() !== tabName) {
+        tr.reason = "tab-switched-away";
+        tr.cardsRaw = 0;
+        return;
+      }
+      for (const c of cards) {
         const id = c.assignmentId || c.rawId;
         if (c.rawId && staleIds.has(c.rawId)) { tr.droppedStale++; continue; }
         if (id && capturedTab.has(id)) { tr.dedupedOut++; continue; }
@@ -571,7 +582,7 @@ async function scrape(trigger = "load") {
     }
     // Retry a tab that showed another tab's list, once, by clicking it from
     // the tab now selected.
-    for (const tr of report.tabs.filter((t) => t.reason === "list-belongs-to-other-tab")) {
+    for (const tr of report.tabs.filter((t) => t.reason === "list-belongs-to-other-tab" || t.reason === "tab-switched-away")) {
       if (selectedTabName() === tr.tab) continue;
       Object.assign(tr, newTabReport(tr.tab), { retried: true });
       await captureTab(tr.tab, tr);

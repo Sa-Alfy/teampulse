@@ -28,6 +28,8 @@
     route=<ms>      app first loads at "/" (nothing rendered) and routes later
     emptyUpcoming=1 Upcoming has no assignments
     emptyText=<s>   empty-state text (default "No assignments")
+    redirect=<ms>   live 2026-10-03: clicking an EMPTY tab shows the Completed list
+                    while that tab still reads selected, then selects Completed after <ms>
     autoSwitch=<ms> live 2026-10-03: opens on Upcoming showing the Past due list,
                     then selects Past due by itself after <ms>
     noTabs=1        tabs are not rendered (DOM drift)
@@ -99,6 +101,7 @@
   let selected = q.get("start") || "Past due";
   let shownTab = selected; // the tab whose list is on screen
   const AUTO = num("autoSwitch", 0);
+  const REDIRECT = num("redirect", 0);
   if (AUTO) { selected = "Upcoming"; shownTab = "Past due"; }
   let gen = 0;
 
@@ -179,8 +182,18 @@
       if (LOAD > 0) list.replaceChildren(...(stillEmpty ? [stillEmpty] : []), el("div", { class: "spinner" }, "Loading"));
       setTimeout(() => {
         if (my !== gen) return;
-        shownTab = tab;
         scroller.scrollTop = 0;
+        if (REDIRECT && !items[tab].length && tab !== "Completed") {
+          shownTab = "Completed";
+          renderList("Completed");
+          setTimeout(() => {
+            if (my !== gen) return;
+            selected = "Completed";
+            document.querySelectorAll("[role='tab']").forEach((b) => b.setAttribute("aria-selected", String(b.getAttribute("data-test") === "Completed")));
+          }, REDIRECT);
+          return;
+        }
+        shownTab = tab;
         renderList(tab);
       }, LOAD);
     }, STALE);

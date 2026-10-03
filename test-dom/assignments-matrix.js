@@ -46,6 +46,7 @@ const SCENARIOS = [
   { name: "tabs missing (DOM drift)", qs: "noTabs=1" },
   { name: "live: opens on Upcoming showing Past due, self-switches 3s", qs: "autoSwitch=3000&emptyUpcoming=1&stale=600" },
   { name: "live: self-switch 300ms", qs: "autoSwitch=300&emptyUpcoming=1&stale=600" },
+  { name: "live: empty Upcoming redirects to Completed (1.5s)", qs: "start=Past%20due&emptyUpcoming=1&stale=600&redirect=1500" },
   { name: "iframe display:none, shown at 4s", qs: "stale=600", frame: "display", showMs: 4000 },
   { name: "iframe 0x0, shown at 4s",  qs: "stale=600", frame: "zero", showMs: 4000 },
   { name: "background tab, visible at 4s", qs: "stale=600", docHidden: true, showMs: 4000 },
