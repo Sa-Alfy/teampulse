@@ -17,7 +17,7 @@
   };
   const desc = (el) => {
     const o = { tag: el.tagName.toLowerCase() };
-    for (const a of ["role", "data-test", "data-tid", "data-testid", "aria-level", "aria-label", "title", "datetime", "id"]) {
+    for (const a of ["role", "data-test", "data-tid", "data-testid", "aria-level", "aria-label", "aria-selected", "aria-controls", "aria-labelledby", "aria-hidden", "hidden", "title", "datetime", "id"]) {
       if (el.hasAttribute(a)) o[a] = cut(el.getAttribute(a));
     }
     const fui = Array.from(el.classList).filter((c) => /^fui-|^ms-/.test(c));
@@ -63,11 +63,33 @@
   });
 
   const report = {
-    probe: "teamspulse-assignments-probe/1",
+    probe: "teamspulse-assignments-probe/2",
     origin: location.origin,
     pathMasked: location.pathname.split("/").map((s) => (/[0-9a-f]{8}-|[A-Za-z0-9_-]{20,}/i.test(s) ? "<id>" : s)).join("/"),
     cardCount: cards.length,
     tabs: Array.from(document.querySelectorAll("[role='tab']")).slice(0, 6).map((t) => ({ ...desc(t), text: cut(t.textContent) })),
+    // probe/2 (v0.6.4): facts needed to scope reads to the ACTIVE tab panel.
+    activePanel: (() => {
+      const sel = document.querySelector("[role='tab'][aria-selected='true']");
+      const ctl = sel && sel.getAttribute("aria-controls");
+      const target = ctl ? document.getElementById(ctl) : null;
+      return {
+        selectedTab: sel ? cut(sel.textContent) : null,
+        ariaControls: ctl || null,
+        controlsTargetExists: !!target,
+        targetDesc: target ? desc(target) : null,
+        cardsInsideTarget: target ? target.querySelectorAll(cardSel).length : null,
+      };
+    })(),
+    tabpanels: Array.from(document.querySelectorAll("[role='tabpanel']")).slice(0, 6).map((p) => ({
+      ...desc(p), cards: p.querySelectorAll(cardSel).length, rendered: p.getClientRects().length > 0,
+    })),
+    cardsInAnyTabpanel: cards.filter((c) => c.closest("[role='tabpanel']")).length,
+    cardsRendered: cards.filter((c) => c.getClientRects().length > 0).length,
+    // Empty-state / loading wording (UI text, ≤80 chars; no assignment data).
+    emptyOrLoadingTexts: Array.from(document.querySelectorAll("body *")).map(ownText)
+      .filter((t) => /no assignments|caught up|nothing|loading|no upcoming|no past/i.test(t) && t.length <= 80).slice(0, 8),
+    frame: { hidden: document.hidden, innerWidth, innerHeight, rendered: document.documentElement.getClientRects().length > 0 },
     samples,
   };
   const json = JSON.stringify(report, null, 2);
