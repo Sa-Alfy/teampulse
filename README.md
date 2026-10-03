@@ -129,6 +129,12 @@ teampulse/
 
 Optional and advanced. This path has not been recently verified. It runs the scraper on your machine on a schedule and produces `digest.md`, a Telegram push and a local JSON API. Not needed for the extension.
 
+### Planned cloud self-host platform
+
+**Status (2026-10-04): planned. Nothing below is built.** The intended next-generation self-host path uses Cloudflare Workers + D1: the extension collects and fingerprints Teams data, then an opt-in server handles change alerts, 24-hour / 3-hour reminders, Telegram commands, and an `.ics` feed. The server will not log into Teams or store a Teams session. The existing Express server remains the legacy self-host API until the Worker reaches parity.
+
+The extension remains the no-setup path. The full phased roadmap, evidence requirements, security rules, and open decisions are in [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) under **Self-Host Platform Roadmap**.
+
 ### 1. Prerequisites
 - **Node.js** v24 or higher — the dedup store uses the built-in `node:sqlite`
   module, which does not exist before Node 22.5 and still prints an

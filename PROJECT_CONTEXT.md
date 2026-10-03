@@ -377,7 +377,128 @@ flowchart TD
 
 ---
 
-## 6. Guidelines for Future AI Agents
+## 6. Self-Host Platform Roadmap (Cloudflare Workers + D1)
+
+> **Status (2026-10-04): PLANNED. Nothing below is built.** Mark an item `[x]` only with evidence (test output, a curl result, a live check) and write that evidence next to it.
+
+### 6.1 Goal
+Make the self-host side the powerful, still easy-to-set-up half of TeamsPulse. The extension stays the simple path (Level 0, no setup). The server adds automatic, no-browser-needed value: change alerts, deadline reminders, a Telegram bot, a calendar feed.
+
+| Level | What | Setup |
+|---|---|---|
+| 0 | Extension only | none |
+| 1 | + server: change alerts, 24 h / 3 h reminders, Telegram commands, `.ics` feed | ~10 min, no terminal if possible |
+| 2 | + opt-in extras: AI parsing (own key), workload planner, link index, class-group digest, integrations | per feature |
+
+### 6.2 Architecture decision: extension collects, server thinks
+```
+Teams tab → extension (scrapes, fingerprints) → delta push → Worker + D1
+                                                   ├─ change detection → events
+                                                   ├─ cron */5 → reminders
+                                                   ├─ Telegram webhook (alerts, commands)
+                                                   └─ .ics feed, dashboard
+```
+- The server **never logs into Teams** and never stores a Teams session. This avoids session expiry, MFA, and datacenter-IP problems, and keeps the Teams session in the student's own browser.
+- No always-on laptop is needed. Alerts and reminders run on stored data. **Change detection is only as fresh as the last time the student opened Teams.** The bot must show "last synced N h ago" and reuse the Live/Stale/Offline idea from Phase A.
+- One instance per student. The maintainer never holds anyone else's data.
+- Host-agnostic core: parsing, diffing, reminder planning and message formatting are pure modules (reusing `extension/core/`), with a thin Worker adapter on top.
+
+### 6.3 Why Cloudflare, not Render free
+- Render free sleeps after 15 min idle and has an ephemeral filesystem (SQLite and `auth-teams.json` are lost on restart), 512 MB RAM / 0.1 CPU, and its free Postgres expires after 30 days. Source: render.com/docs/free.
+- Workers has built-in cron, no sleeping, and persistent D1 (SQLite-based).
+- The existing Express `server.js` stays as the legacy self-host API until the Worker reaches parity. The Playwright scrapers (`teams.js`, `scrape-posts.js`) stay a dev / reverse-engineering harness, not a production path.
+
+### 6.4 Verified platform facts (Cloudflare limits page, last updated 2026-09-05)
+| Limit (Workers Free) | Value | Design consequence |
+|---|---|---|
+| CPU time per HTTP request / cron trigger | 10 ms (waiting on network/DB doesn't count) | Small payloads, SQL does the diffing, handwritten validation, log CPU per request from day one |
+| Requests | 100,000 / day | Cron every 5 min = 288/day, fine |
+| Cron triggers | 5 per account | Use 1 |
+| Subrequests | 50 external, 1,000 to CF services (incl. D1) | Batch D1 writes |
+| Variables | 64 per Worker, 5 KB each | Telegram token + few settings |
+| D1 free tier | Daily row read/write limits are enforced (since 2026-09-01) | Index every lookup, avoid full scans |
+
+### 6.5 Unverified (check before relying on)
+- [ ] Wrangler's minimum Node version (local Node is v24.19.0)
+- [ ] D1 FTS5 support (for full-text search)
+- [ ] Whether a "Deploy to Cloudflare" button works for this repo
+- [ ] Real CPU cost of ingest on a realistic payload (measure in Phase 2)
+- [ ] That the free plan never asks for a payment method during deploy
+
+### 6.6 Phases (one small agent task per bullet group; each ends with test output)
+
+**Phase 0: Prerequisites**
+- [x] Cloudflare account created, free plan, no payment prompt seen (2026-10-04)
+- [ ] 2FA enabled, recovery codes saved
+- [ ] D1 listed under Storage & databases
+- [ ] Store submission still takes priority over this roadmap
+
+**Phase 1: Host-agnostic core (pure modules, no I/O)**
+- [ ] Diff engine keyed by the existing stable id/fingerprint
+- [ ] Event types: `new_assignment`, `due_date_changed` (old/new), `assignment_submitted`, `assignment_removed`, `new_post`, `tagged_post` (reuse `classify`; no new regexes)
+- [ ] Reminder planner: (items, now) → due reminders at 24 h / 3 h, skipping submitted items
+- [ ] Message formatters for alerts and digests
+- [ ] Tests: idempotent diff (same payload twice = 0 events); existing suite still green (baseline 103 pass, 1 skipped)
+
+**Phase 2: Worker + D1**
+- [ ] Schema + migrations: items, events, reminders_sent, settings; indexes on every lookup
+- [ ] `POST /api/ingest` (delta payload), bearer key, constant-time compare, fail closed when the key is unset, 413/415/400 handling, hard size cap
+- [ ] `GET /api/events?since=`
+- [ ] CPU time logged per request; record the measured numbers here
+
+**Phase 3: Telegram**
+- [ ] Webhook, pairing via `/start <code>`, chat-ID allowlist
+- [ ] Alerts from events, priority + quiet hours
+- [ ] Commands: `/today`, `/week`, `/due`, `/search`
+- [ ] "Last synced N h ago" in replies
+
+**Phase 4: Reminders**
+- [ ] One cron trigger every 5 min runs the planner; idempotent via `reminders_sent`
+
+**Phase 5: Setup and health**
+- [ ] `/setup`: auto-generated key shown once as a single pairing code
+- [ ] `/doctor`: green/red checks (server, DB, last sync, Telegram link) with a fix hint per red item
+- [ ] One-click or one-command deploy; 6-step student guide
+
+**Phase 6: Extension "Connect" (self-host build)**
+- [ ] Settings: paste pairing code; delta push after each sync; last-push status
+- [ ] Decision pending: two builds (store build stays network-free, self-host build from GitHub releases) vs one build with an optional host permission. Default: **two builds**.
+
+**Phase 7: Interface extras**
+- [ ] `.ics` feed on a secret, revocable URL
+- [ ] Full-text search over stored posts
+- [ ] Dashboard: filters, week-by-week workload view
+
+**Phase 8: Opt-in power features (Level 2)**
+- [ ] Gemini parsing of announcements: own key, opt-in, post text only
+- [ ] Workload planner / crunch-week flags
+- [ ] Link and file-name index (links only, no downloads)
+- [ ] Class-group digest of public items only; never personal data such as submission status
+- [ ] Integrations (Discord, ntfy, webhooks)
+
+**Later / experiments**
+- [ ] Background refresh alarm in the extension (hidden tab, only while the browser runs)
+- [ ] Cloud-session experiment: session in a private repo secret, load Teams once at 1/3/7 days, watch for expiry or security flags before building on it
+- [ ] Teams notification emails as a second data source (check whether the university mailbox receives them)
+- [ ] Student portal as a source (not examined yet)
+
+### 6.7 Security rules (apply to every phase)
+- HTTPS only; random per-instance API key; fail closed; payload size caps.
+- All ingested text is hostile: store as plain text, never interpolate into HTML, SQL strings, shell, or logs.
+- The extension never reads or sends cookies, tokens, or credentials.
+- Telegram: only the paired chat ID can issue commands. `.ics` URL is secret and revocable.
+- A "delete all my data" action exists before the first release.
+- No portal passwords are ever stored. AI features are off by default.
+
+### 6.8 Open decisions
+- Final product name (affects store listing, privacy page, and the `workers.dev` subdomain)
+- Two builds vs one build with optional host permission (Phase 6)
+- How the student gets reliable freshness (Teams open habit vs background refresh)
+- Whether to email university IT about admin consent for calendar access (parallel path, still undecided)
+
+---
+
+## 7. Guidelines for Future AI Agents
 1. **Always read this file first** before touching code.
 2. **Never guess selectors**: Run small diagnostic inspection scripts and view screenshots before modifying scrapers.
 3. **Never commit sensitive files**: Double-check `git status` to ensure `auth-teams.json`, `assignments.json`, and debug screenshots are never staged.
@@ -400,7 +521,7 @@ flowchart TD
 
 ---
 
-## 7. Test Coverage
+## 8. Test Coverage
 
 Counts as of v0.7.3 (2026-10-03): `node --test` 104 (103 pass, 1 skipped placeholder) · `npm run test:dom` 47 · `npm run test:e2e` 5, all passing.
 
