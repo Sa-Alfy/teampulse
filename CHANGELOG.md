@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.7.0 (unreleased): popup redesign for students
+
+- **Overview tab (new default):** a one-line summary ("2 overdue · 1 today"), the next thing due, then everything sorted by urgency: Overdue, Today, Tomorrow, This week, Later, No due date. Assignments overdue for more than 14 days are folded behind "Show N older".
+- **Exams and quizzes on the agenda:** dated CT/Quiz, Exam, Presentation, Deadline, Reschedule and Cancelled announcements show up next to assignments. Repeats of the same class, day and kind are merged. One is skipped when an assignment due that day has its title in the post.
+- **Countdowns:** "in 2 days", "7h late", with weekday dates instead of ISO dates.
+- **Mark done:** ticking an assignment hides it in TeamsPulse only (Teams is not changed). Kept locally under `tp:ui:done`, with a "N marked done" list to undo.
+- **Updates tab:** announcements newest first, grouped by Today / Yesterday / This week / Earlier. Unread marks, click to expand, and "Mark all as read" (`tp:ui:read`). Tab counts now show what needs you: attention items, open tasks and unread updates.
+- **Class chips** with a stable colour per course replace the class dropdown. The time filter is removed because the urgency groups do its job.
+- **Links open (owner-approved):** `https://` URLs in posts are links that open in a new tab (`rel="noopener noreferrer"`, no referrer). Long ones show as "🔗 docs.google.com/…". Other schemes (`http:`, `javascript:` and so on) stay plain text. Rendering a link fetches nothing; a page loads only when the student clicks.
+- **ISO dates (owner-approved):** `extractDate` now reads `2026-10-07` / `2026/10/07` (years 19xx–20xx only), so "CT on 2026-10-07" reaches the agenda. This is shared code, so the self-host digest (`build-digest.js` / `server.js`) picks up these dates too.
+- **Less chrome:** Sync is a header button, Auto-sync is under ⚙, and the .ics export sits under the list. "Capture details" appears only when the last capture had a problem. The popup has a fixed size with only the list scrolling.
+- "Clear stored data" also clears done/read marks. Verified with new popup DOM tests (`npm run test:dom`). **Not checked against real Teams data in a real browser popup.**
+
 ## 0.6.7 (2026-10-03, pre-release): only current (unhidden) classes
 
 - Owner's choice: assignments from old or hidden classes are dropped and counted in the report as "not a visited class". A class counts as current once you open it or Sync all classes visits it (Sync skips hidden teams). All-classes cards without a class line are dropped too.

@@ -212,8 +212,105 @@ async function runHealth(browser, runTest) {
   });
 }
 
+async function runStudentUx(browser, runTest) {
+  const ymd = (days) => {
+    const d = new Date(Date.now() + days * 864e5);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
+  function uxSeed() {
+    const now  = new Date().toISOString();
+    const seed = seedState(now, now);
+    const other = "Test MAT 103";
+    seed["tp:v1:class-index"].push(other);
+    seed[`tp:v1:posts:${other}`] = {};
+    seed[`tp:v1:assignments:${other}`] = [
+      { tab: "Past due", title: "Old lab", details: "", dueDate: ymd(-3), dueRaw: "" },
+      { tab: "Upcoming", title: "Essay", details: "", dueDate: ymd(2), dueRaw: "" },
+    ];
+    seed[`tp:v1:last-sync:${other}`] = now;
+    return seed;
+  }
+
+  await runTest("Overview groups tasks by urgency; ticking one done hides it and persists locally", async () => {
+    const { ctx, page, requests } = await openPopup(browser, uxSeed());
+    await page.waitForSelector("#feedContainer:not(.hidden)", { timeout: 5000 });
+    const labels = await page.locator("#classList .section-label").allTextContents();
+    assert.ok(labels[0].startsWith("Overdue"), `first section should be Overdue, got ${labels.join(" | ")}`);
+    assert.strictEqual(await page.locator("#countAssignments").textContent(), "3");
+
+    await page.locator(".agenda-row", { hasText: "Old lab" }).locator(".done-box").click();
+    await page.waitForFunction(() => document.getElementById("countAssignments").textContent === "2");
+    assert.strictEqual(await page.locator("#classList .agenda-row", { hasText: "Old lab" }).count(), 0, "done task still on Overview");
+    const done = await page.evaluate(() => window.__local["tp:ui:done"]);
+    assert.strictEqual(done.length, 1, "done mark not stored");
+
+    await page.click("#tabAssignments");
+    await page.click("text=/1 marked done/");
+    assert.strictEqual(await page.locator(".agenda-row.done", { hasText: "Old lab" }).count(), 1, "done list not shown");
+    assert.deepStrictEqual(requests, []);
+    await ctx.close();
+  });
+
+  await runTest("Updates: Mark all as read clears the unread count; class chip filters", async () => {
+    const { ctx, page } = await openPopup(browser, uxSeed());
+    await page.waitForSelector("#feedContainer:not(.hidden)", { timeout: 5000 });
+    assert.strictEqual(await page.locator("#countNotices").textContent(), "1");
+    await page.click("#tabNotices");
+    await page.click("text=Mark all as read");
+    await page.waitForFunction(() => document.getElementById("countNotices").textContent === "0");
+    assert.strictEqual((await page.evaluate(() => window.__local["tp:ui:read"])).length, 1);
+
+    await page.click("#tabAssignments");
+    await page.click(".filter-chip:has-text('MAT 103')");
+    const text = await page.locator("#classList").textContent();
+    assert.ok(text.includes("Essay") && !text.includes("Lab <img"), "class chip did not filter");
+    assert.strictEqual(await page.locator("#countAssignments").textContent(), "2");
+    await ctx.close();
+  });
+
+  await runTest("https links open in a new tab; other schemes stay plain text", async () => {
+    const now  = new Date().toISOString();
+    const seed = uxSeed();
+    seed["tp:v1:seen-hashes"].h2 = { seenAt: now, surfaced: true };
+    seed["tp:v1:posts:Test CSE 312"].h2 = { className: "Test CSE 312", seenAt: now, surfaced: true, post: {
+      author: "Dr X", isBot: false, isAnnouncement: true, subject: "Team sheet deadline",
+      body: "https://docs.google.com/spreadsheets/d/abcdefghijklmnop/edit then javascript:alert(1) or http://plain.example/x",
+      timestamp: "", timestampFull: "", timestampIso: now, attachments: [], urlPreviews: [], replyCount: 0, replies: [] } };
+    const { ctx, page, requests } = await openPopup(browser, seed);
+    await page.waitForSelector("#feedContainer:not(.hidden)", { timeout: 5000 });
+    await page.click("#tabNotices");
+    const links = await page.locator("#classList a").evaluateAll((as) => as.map((a) => ({
+      href: a.href, target: a.target, rel: a.rel, text: a.textContent })));
+    const doc = links.find((l) => l.href.startsWith("https://docs.google.com/"));
+    assert.ok(doc, `docs link missing: ${JSON.stringify(links)}`);
+    assert.strictEqual(doc.target, "_blank");
+    assert.match(doc.rel, /noopener/);
+    assert.match(doc.rel, /noreferrer/);
+    assert.strictEqual(doc.text, "🔗 docs.google.com/…");
+    assert.ok(links.every((l) => l.href.startsWith("https:")), `non-https link: ${JSON.stringify(links)}`);
+    assert.ok((await page.locator("#classList").textContent()).includes("http://plain.example/x"), "http URL should stay text");
+    assert.deepStrictEqual(requests, [], "rendering links must not fetch anything");
+    await ctx.close();
+  });
+
+  await runTest("Clear stored data also forgets done/read marks", async () => {
+    const seed = uxSeed();
+    seed["tp:ui:done"] = ["x"];
+    seed["tp:ui:read"] = ["y"];
+    const { ctx, page } = await openPopup(browser, seed);
+    await page.waitForSelector("#feedContainer:not(.hidden)", { timeout: 5000 });
+    await page.click("#clearDataBtn");
+    await page.click("#clearDataBtn");
+    await page.waitForSelector("#noDataState:not(.hidden)", { timeout: 5000 });
+    const left = await page.evaluate(() => Object.keys(window.__local).filter((k) => k.startsWith("tp:ui:")));
+    assert.deepStrictEqual(left, []);
+    await ctx.close();
+  });
+}
+
 module.exports = { run: async (browser, runTest) => {
   await run(browser, runTest);
+  await runStudentUx(browser, runTest);
   await runHealth(browser, runTest);
   await runIcs(browser, runTest);
   await runCaptureDetails(browser, runTest);

@@ -25,6 +25,14 @@ test("extractDate: day-first numeric", () => {
   assert.strictEqual(extractDate("CT on 20/09/2025", 2026), "2025-09-20");
 });
 
+test("extractDate: ISO year-first dates", () => {
+  assert.strictEqual(extractDate("CT-2 on 2026-10-07", 2025), "2026-10-07");
+  assert.strictEqual(extractDate("Due 2026/1/5 at 9 AM", 2025), "2026-01-05");
+  assert.strictEqual(extractDate("starts 2026-10-07T09:30", 2025), "2026-10-07");
+  assert.strictEqual(extractDate("exam 2026-02-30", 2025), null);
+  assert.strictEqual(extractDate("id 12026-10-07", 2025), null);
+});
+
 test("extractDate: rejects impossible calendar days", () => {
   assert.strictEqual(extractDate("exam 31.02.2026", 2026), null);
   assert.strictEqual(extractDate("exam 32.01.2026", 2026), null);

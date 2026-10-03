@@ -5,6 +5,14 @@
  * shapes it with core/shape.js. Makes no network requests. Live-updates on
  * chrome.storage.onChanged instead of polling.
  *
+ * Three views over the same data:
+ *   Overview — what needs attention: overdue, due today / tomorrow / this week,
+ *              dated exams & quizzes pulled from announcements, unread updates.
+ *   Tasks    — every open assignment by due date; tick one off to hide it.
+ *   Updates  — announcements newest first, grouped by day, unread marked.
+ *
+ * "Done" and "read" marks are local UI state (tp:ui:*), never sent anywhere.
+ *
  * Scraped text is untrusted — it is only ever written with textContent.
  */
 
@@ -14,12 +22,14 @@ const store = TP.createStore(TP.chromeBackend());
 const TAB_CTX_PREFIX = TP.tabCtxKey("");
 
 // DOM Elements
-const refreshBtn       = document.getElementById("refreshBtn");
 const filterToggleBtn  = document.getElementById("filterToggleBtn");
+const settingsBtn      = document.getElementById("settingsBtn");
+const settingsPanel    = document.getElementById("settingsPanel");
 const clearDataBtn     = document.getElementById("clearDataBtn");
 const staleBanner      = document.getElementById("staleBanner");
 const scraperBanner    = document.getElementById("scraperBanner");
 const syncAllBtn       = document.getElementById("syncAllBtn");
+const syncIcon         = document.getElementById("syncIcon");
 const syncStatus       = document.getElementById("syncStatus");
 
 const SYNC_CMD_KEY    = "tp:sync:cmd";
@@ -29,16 +39,18 @@ const SYNC_REASONS = {
   "no-classes-found":       "No classes found on the Teams page.",
   "unexpected":             "Sync stopped unexpectedly.",
 };
+
+// Local UI state — not scraped data, so outside the tp:v1: namespace.
+const UI_DONE_KEY = "tp:ui:done"; // task keys the student ticked off
+const UI_READ_KEY = "tp:ui:read"; // announcement keys the student has read
+
 const controlsBar      = document.getElementById("controlsBar");
-const classFilter      = document.getElementById("classFilter");
-const timeFilter       = document.getElementById("timeFilter");
 const searchInput      = document.getElementById("searchInput");
 const clearSearchBtn   = document.getElementById("clearSearchBtn");
+const classChips       = document.getElementById("classChips");
 
 const liveBadge        = document.getElementById("liveBadge");
 const liveText         = document.getElementById("liveText");
-const lastScrapeText   = document.getElementById("lastScrapeText");
-const syncTimer        = document.getElementById("syncTimer");
 const footerStats      = document.getElementById("footerStats");
 
 // Tab buttons & counts
@@ -54,54 +66,58 @@ const loadingState     = document.getElementById("loadingState");
 const noDataState      = document.getElementById("noDataState");
 const filterEmptyState = document.getElementById("filterEmptyState");
 const feedContainer    = document.getElementById("feedContainer");
+const feedActions      = document.getElementById("feedActions");
 const classList        = document.getElementById("classList");
 
 // Local App State
 let activeTab          = "all"; // "all" | "notices" | "assignments"
+let selectedClass      = "all";
 let rawDigestData      = null;
 let rawStatusData      = null;
 let tickerInterval     = null;
 let reloadTimer        = null;
-let collapsedState     = {};
+let doneSet            = new Set();
+let readSet            = new Set();
+const expanded         = { oldOverdue: false, done: false };
 
-function getStoredCollapseState() {
+const DAY_MS = 86400e3;
+const OLD_OVERDUE_DAYS = 14;   // overdue longer than this folds away
+const OVERVIEW_UPDATES = 5;    // unread announcements shown on Overview
+
+function readUiSets() {
   return new Promise((resolve) => {
-    if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
-      chrome.storage.local.get(["collapsedClasses"], (res) => {
-        if (res && res.collapsedClasses && typeof res.collapsedClasses === "object") {
-          resolve(res.collapsedClasses);
-        } else {
-          resolve({});
-        }
+    try {
+      chrome.storage.local.get([UI_DONE_KEY, UI_READ_KEY], (res) => {
+        const r = res || {};
+        doneSet = new Set(Array.isArray(r[UI_DONE_KEY]) ? r[UI_DONE_KEY] : []);
+        readSet = new Set(Array.isArray(r[UI_READ_KEY]) ? r[UI_READ_KEY] : []);
+        resolve();
       });
-    } else {
-      resolve({});
+    } catch (_) {
+      resolve();
     }
   });
 }
+const uiSetsPromise = readUiSets();
 
-const collapseStatePromise = getStoredCollapseState().then((state) => {
-  collapsedState = { ...state };
-});
-
-function saveCollapseState(classKey, isCollapsed) {
-  collapsedState[classKey] = isCollapsed;
-  if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
-    try {
-      chrome.storage.local.set({ collapsedClasses: collapsedState }, () => {
-        if (chrome.runtime && chrome.runtime.lastError) {
-          // Ignore storage errors in restricted contexts
-        }
-      });
-    } catch (_) {
-      // Storage unavailable
-    }
+function saveUiSet(key, set) {
+  try {
+    chrome.storage.local.set({ [key]: Array.from(set) });
+  } catch (_) {
+    // Storage unavailable — the mark lasts until the popup closes.
   }
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined && text !== null) node.textContent = text;
+  return node;
+}
 
 function formatRelativeTime(isoString) {
   if (!isoString) return "Never";
@@ -116,6 +132,52 @@ function formatRelativeTime(isoString) {
   if (diffHours < 24) return `${diffHours}h ago`;
   const diffDays = Math.floor(diffHours / 24);
   return `${diffDays}d ago`;
+}
+
+function startOfDay(ms) {
+  const d = new Date(ms);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+/** "2026-07-18" → local midnight. `new Date("2026-07-18")` is UTC midnight,
+ *  which is the previous day west of Greenwich. */
+function parseLocalDate(ymd) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd || "");
+  if (!m) return null;
+  const ms = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime();
+  return isNaN(ms) ? null : ms;
+}
+
+function dayDiff(ms, nowMs) {
+  return Math.round((startOfDay(ms) - startOfDay(nowMs)) / DAY_MS);
+}
+
+function formatDay(ms) {
+  return new Date(ms).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+}
+
+function formatClock(ms) {
+  return new Date(ms).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
+/** Countdown for a due moment: "in 3h", "tomorrow", "in 5 days", "2d late". */
+function countdown(ms, nowMs, { dayOnly = false } = {}) {
+  const diff = ms - nowMs;
+  const days = dayDiff(ms, nowMs);
+  if (diff < 0 && !dayOnly) {
+    const late = -diff;
+    if (late < 3600e3) return `${Math.max(1, Math.round(late / 60e3))}m late`;
+    if (late < DAY_MS) return `${Math.round(late / 3600e3)}h late`;
+    return `${Math.floor(late / DAY_MS)}d late`;
+  }
+  if (days === 0) {
+    if (dayOnly) return "today";
+    if (diff < 3600e3) return `in ${Math.max(1, Math.round(diff / 60e3))}m`;
+    return `in ${Math.round(diff / 3600e3)}h`;
+  }
+  if (days === 1) return "tomorrow";
+  return `in ${days} days`;
 }
 
 // Tag → CSS modifier. Keyed on the exact strings classify() emits rather than
@@ -133,9 +195,80 @@ const TAG_CLASSES = {
   "📢 Notice":       "notice",
 };
 
+// Announcements with these tags and a date become entries on the agenda.
+const EVENT_TAGS = new Set(["ct", "exam", "presentation", "reschedule", "cancelled", "deadline"]);
+
 function getTagClass(tag) {
   if (!tag) return "notice";
   return TAG_CLASSES[tag.trim()] || "notice";
+}
+
+// A stable accent per class so a course reads the same colour everywhere.
+const CLASS_COLORS = ["#60a5fa", "#f472b6", "#34d399", "#fbbf24", "#a78bfa", "#f87171", "#22d3ee", "#fb923c"];
+
+function classColor(key) {
+  let h = 0;
+  for (const ch of String(key || "")) h = (h * 31 + ch.codePointAt(0)) >>> 0;
+  return CLASS_COLORS[h % CLASS_COLORS.length];
+}
+
+function classChip(item) {
+  const chip = el("span", "class-chip", item.classLabel);
+  chip.style.setProperty("--c", item.color);
+  chip.title = item.rawClassName || item.classLabel;
+  return chip;
+}
+
+function taskKey(c, a) {
+  return `t|${c.key || c.rawClassName || c.className}|${a.title || ""}|${a.dueDate || ""}`;
+}
+
+function noticeKey(c, n) {
+  return `n|${c.key || c.rawClassName || c.className}|${n.timestampIso || n.originalTimestamp || ""}|${(n.subject || n.summary || "").slice(0, 60)}`;
+}
+
+/**
+ * Append untrusted text to `parent`, turning https:// URLs into links that
+ * open in a new tab. Long ones are shown compactly ("🔗 docs.google.com/…").
+ * Only https URLs that parse cleanly become links (no javascript:, data: or
+ * plain http); the popup itself still fetches nothing — a link only loads
+ * when the student clicks it. Everything goes through textContent and the
+ * href property — never innerHTML.
+ */
+const URL_RE = /https:\/\/[^\s<>"']+/g;
+const LONG_URL = 40;
+
+function safeHttpsUrl(raw) {
+  try {
+    const u = new URL(raw);
+    return u.protocol === "https:" && u.hostname ? u : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function appendLinkified(parent, text) {
+  const str = String(text || "");
+  let last = 0;
+  for (const m of str.matchAll(URL_RE)) {
+    let url = m[0];
+    const trail = /[).,;:!?\]]+$/.exec(url);
+    if (trail) url = url.slice(0, -trail[0].length);
+    const parsed = safeHttpsUrl(url);
+    if (!parsed) continue; // leave it in the text run
+    if (m.index > last) parent.appendChild(document.createTextNode(str.slice(last, m.index)));
+    const host = parsed.hostname.replace(/^www\./, "");
+    const link = el("a", "link-chip", url.length > LONG_URL ? `🔗 ${host}/…` : url);
+    link.href = parsed.href;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.referrerPolicy = "no-referrer";
+    link.title = `Open ${parsed.href}`;
+    link.addEventListener("click", (e) => e.stopPropagation()); // don't toggle the card
+    parent.appendChild(link);
+    last = m.index + url.length;
+  }
+  if (last < str.length) parent.appendChild(document.createTextNode(str.slice(last)));
 }
 
 function setView(viewName) {
@@ -180,27 +313,38 @@ function setBadge(text) {
 // Data (local storage only — no network)
 // ---------------------------------------------------------------------------
 
-async function loadData(silent = false) {
-  if (!silent) {
-    refreshBtn.querySelector(".refresh-icon").classList.add("spinning");
-  }
-
+async function loadData() {
   try {
-    const [state] = await Promise.all([store.getState(), collapseStatePromise]);
+    const [state] = await Promise.all([store.getState(), uiSetsPromise]);
     const nowMs = Date.now();
     rawStatusData = TP.buildStatus(state, nowMs);
     rawDigestData = TP.buildDigest(state, { nowMs });
 
+    pruneUiSets();
     updateHeaderMeta();
-    updateClassDropdown();
+    renderClassChips();
     applyFiltersAndRender();
   } catch (err) {
     rawStatusData = null;
     rawDigestData = null;
     footerStats.textContent = "Could not read stored data.";
     setView("no-data");
-  } finally {
-    refreshBtn.querySelector(".refresh-icon").classList.remove("spinning");
+  }
+}
+
+/** Forget done/read marks for items that are no longer stored. */
+function pruneUiSets() {
+  const classes = (rawDigestData && rawDigestData.classes) || [];
+  if (classes.length === 0) return;
+  const live = new Set();
+  for (const c of classes) {
+    for (const a of c.assignments || []) live.add(taskKey(c, a));
+    for (const n of c.notices || []) live.add(noticeKey(c, n));
+  }
+  for (const [key, set] of [[UI_DONE_KEY, doneSet], [UI_READ_KEY, readSet]]) {
+    const before = set.size;
+    for (const k of set) if (!live.has(k)) set.delete(k);
+    if (set.size !== before) saveUiSet(key, set);
   }
 }
 
@@ -208,30 +352,27 @@ function scheduleReload() {
   if (reloadTimer !== null) clearTimeout(reloadTimer);
   reloadTimer = setTimeout(() => {
     reloadTimer = null;
-    loadData(true);
+    loadData();
   }, 300);
 }
 
 function updateHeaderMeta() {
   if (!rawStatusData) return;
   const noData = Boolean(rawStatusData.noDataYet);
-
-  if (rawStatusData.lastScrape) {
-    lastScrapeText.textContent = `Last capture: ${formatRelativeTime(rawStatusData.lastScrape)}`;
-  } else {
-    lastScrapeText.textContent = "Nothing captured yet";
-  }
+  const captured = rawStatusData.lastScrape
+    ? `Updated ${formatRelativeTime(rawStatusData.lastScrape)}`
+    : "Nothing captured yet";
 
   // A suspect scraper explains stale data better than "open Teams" does, so it
   // replaces the stale banner rather than stacking with it.
   const suspect = rawStatusData.scraper === "suspect";
   setHealthPill(rawStatusData.health);
+  liveBadge.title = rawStatusData.lastScrape ? `Last capture: ${formatRelativeTime(rawStatusData.lastScrape)}` : "Nothing captured yet";
   scraperBanner.classList.toggle("hidden", !suspect);
   staleBanner.classList.toggle("hidden", suspect || noData || rawStatusData.health !== "stale");
 
   const totalSeen = rawStatusData.totalSeen || 0;
-  const newCount = rawDigestData ? (rawDigestData.newPostCount || 0) : 0;
-  footerStats.textContent = `${totalSeen} posts indexed · ${newCount} new today`;
+  footerStats.textContent = `${captured} · ${totalSeen} posts on this device`;
 }
 
 // Two-step confirm inside the popup (native confirm() dialogs are unreliable
@@ -240,6 +381,9 @@ let clearConfirmTimer = null;
 
 async function clearAllData() {
   await store.clearAll();
+  await chrome.storage.local.remove([UI_DONE_KEY, UI_READ_KEY]);
+  doneSet = new Set();
+  readSet = new Set();
   if (chrome.storage && chrome.storage.session) {
     const all = await chrome.storage.session.get(null);
     const ctxKeys = Object.keys(all || {}).filter((k) => k.startsWith(TAB_CTX_PREFIX));
@@ -255,360 +399,440 @@ function resetClearButton() {
 }
 
 // ---------------------------------------------------------------------------
-// Filtering & Rendering
+// Model: flatten classes into tasks, dated events and announcements
 // ---------------------------------------------------------------------------
 
-function updateClassDropdown() {
-  if (!rawDigestData || !rawDigestData.classes) return;
+function classLabelOf(c) {
+  // displayName carries the section suffix when two teams share a course
+  // code, so "CSE 312 (V1)" and "CSE 312 (V2)" stay tellable apart.
+  return c.displayName || c.className;
+}
 
-  const currentSelection = classFilter.value;
-  classFilter.replaceChildren(new Option("All Classes", "all"));
+function renderClassChips() {
+  const classes = (rawDigestData && rawDigestData.classes) || [];
+  // Value is the raw class name: two sections of one course share a short
+  // name, so selecting by short name would filter to both.
+  if (selectedClass !== "all" && !classes.some((c) => (c.key || c.rawClassName || c.className) === selectedClass)) {
+    selectedClass = "all";
+  }
+  classChips.replaceChildren();
+  classChips.hidden = classes.length < 2;
+  if (classes.length < 2) return;
 
-  for (const c of rawDigestData.classes) {
-    const totalItems = (c.noticesCount || 0) + (c.assignmentsCount || 0);
-    const opt = document.createElement("option");
-    // Value is the raw class name: two sections of one course share a short
-    // name, so selecting by short name would filter to both.
-    opt.value = c.key || c.rawClassName || c.className;
-    opt.textContent = `${c.displayName || c.className} (${totalItems})`;
-    if (opt.value === currentSelection) opt.selected = true;
-    classFilter.appendChild(opt);
+  const make = (value, label, color) => {
+    const b = el("button", "filter-chip", label);
+    b.type = "button";
+    if (color) b.style.setProperty("--c", color);
+    b.setAttribute("aria-pressed", value === selectedClass ? "true" : "false");
+    b.addEventListener("click", () => {
+      selectedClass = value === selectedClass ? "all" : value;
+      renderClassChips();
+      applyFiltersAndRender();
+    });
+    return b;
+  };
+  classChips.appendChild(make("all", "All classes", null));
+  for (const c of classes) {
+    const key = c.key || c.rawClassName || c.className;
+    classChips.appendChild(make(key, classLabelOf(c), classColor(key)));
   }
 }
 
-function matchesTimeFilter(timestampIso, timeOption) {
-  if (timeOption === "all") return true;
-  if (!timestampIso) return true;
-  const postTime = new Date(timestampIso).getTime();
-  if (isNaN(postTime)) return true;
+function buildModel(nowMs) {
+  const query = searchInput.value.trim().toLowerCase();
+  const matches = (s) => !query || s.toLowerCase().includes(query);
 
-  const hours = parseInt(timeOption, 10);
-  const maxDiffMs = hours * 3600 * 1000;
-  return Date.now() - postTime <= maxDiffMs;
+  const tasks = [];
+  const events = [];
+  const notices = [];
+
+  for (const c of rawDigestData.classes) {
+    const key = c.key || c.rawClassName || c.className;
+    if (selectedClass !== "all" && key !== selectedClass) continue;
+    const base = { classKey: key, classLabel: classLabelOf(c), rawClassName: c.rawClassName, color: classColor(key) };
+
+    for (const a of c.assignments || []) {
+      if (!matches(`${a.title} ${a.details || ""} ${a.tab} ${base.classLabel}`)) continue;
+      let dueMs = null;
+      if (a.dueIso) dueMs = Date.parse(a.dueIso);
+      if ((dueMs === null || isNaN(dueMs)) && a.dueDate) {
+        const d = parseLocalDate(a.dueDate);
+        dueMs = d === null ? null : d + DAY_MS - 60e3;
+      }
+      if (dueMs !== null && isNaN(dueMs)) dueMs = null;
+      // Teams says "Past due" even when our parsed date disagrees; trust it.
+      const overdue = a.tab === "Past due" || (dueMs !== null && dueMs < nowMs);
+      const k = taskKey(c, a);
+      tasks.push({ ...base, kind: "task", key: k, a, title: a.title || "Untitled assignment",
+        dueMs, hasTime: Boolean(a.dueTime), overdue, done: doneSet.has(k) });
+    }
+
+    for (const n of c.notices || []) {
+      const text = `${n.tag} ${n.summary} ${n.subject || ""} ${n.author || ""} ${n.date || ""} ${base.classLabel}`;
+      if (!matches(text)) continue;
+      const k = noticeKey(c, n);
+      const postedMs = n.timestampIso ? Date.parse(n.timestampIso) : NaN;
+      const item = { ...base, kind: "notice", key: k, n, tagClass: getTagClass(n.tag),
+        postedMs: isNaN(postedMs) ? null : postedMs, unread: Boolean(n.isNew) && !readSet.has(k) };
+      notices.push(item);
+
+      const dayMs = parseLocalDate(n.date);
+      if (dayMs !== null && EVENT_TAGS.has(item.tagClass) && dayDiff(dayMs, nowMs) >= 0) {
+        events.push({ ...base, kind: "event", key: k, notice: item, dueMs: dayMs, tagClass: item.tagClass,
+          title: n.subject || n.summary || "Announcement" });
+      }
+    }
+  }
+
+  notices.sort((x, y) => (y.postedMs || 0) - (x.postedMs || 0));
+
+  // One agenda entry per class/day/kind (several posts often repeat the same
+  // CT date), and none when an assignment on that day already covers it.
+  const seen = new Set();
+  const dedupedEvents = [];
+  for (const ev of events.sort((x, y) => (y.notice.postedMs || 0) - (x.notice.postedMs || 0))) {
+    const id = `${ev.classKey}|${ev.dueMs}|${ev.tagClass}`;
+    if (seen.has(id)) continue;
+    const blob = `${ev.notice.n.subject || ""} ${ev.notice.n.summary || ""}`.toLowerCase();
+    const coveredByTask = tasks.some((t) => t.classKey === ev.classKey && t.dueMs !== null &&
+      startOfDay(t.dueMs) === ev.dueMs && t.title.length > 2 && blob.includes(t.title.toLowerCase()));
+    if (coveredByTask) continue;
+    seen.add(id);
+    dedupedEvents.push(ev);
+  }
+
+  return { tasks, events: dedupedEvents, notices, query };
 }
 
-/**
- * Time filter for assignments.
- *
- * The dropdown is backward-looking ("Last 24h"), but a task is relevant when
- * it is *near* now in either direction: something that went past due yesterday
- * and something due tomorrow are both what you came to check. So the window is
- * symmetric, ±N hours. An assignment with no parseable due date is always kept
- * — dropping a task because we couldn't read its date is the wrong failure.
- */
-function assignmentMatchesTimeFilter(assignment, timeOption) {
-  if (timeOption === "all") return true;
-  const dateStr = assignment.dueIso || assignment.dueDate;
-  if (!dateStr) return true;
-
-  const due = new Date(dateStr).getTime();
-  if (isNaN(due)) return true;
-
-  const windowMs = parseInt(timeOption, 10) * 3600 * 1000;
-  return Math.abs(due - Date.now()) <= windowMs;
+/** Split agenda items into time buckets, each sorted soonest first. */
+function bucketize(items, nowMs) {
+  const b = { overdue: [], today: [], tomorrow: [], week: [], later: [], undated: [] };
+  for (const it of items) {
+    if (it.kind === "task" && it.overdue) { b.overdue.push(it); continue; }
+    if (it.dueMs === null) { b.undated.push(it); continue; }
+    const d = dayDiff(it.dueMs, nowMs);
+    if (d <= 0) b.today.push(it);
+    else if (d === 1) b.tomorrow.push(it);
+    else if (d <= 7) b.week.push(it);
+    else b.later.push(it);
+  }
+  const bySoonest = (x, y) => (x.dueMs ?? Infinity) - (y.dueMs ?? Infinity);
+  for (const list of Object.values(b)) list.sort(bySoonest);
+  b.overdue.reverse(); // most recently missed first — the ones still worth saving
+  return b;
 }
 
-function setSectionLabel(el, icon, text) {
-  const iconSpan = document.createElement("span");
-  iconSpan.textContent = icon;
-  el.replaceChildren(iconSpan, document.createTextNode(` ${text}`));
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+
+function sectionHeader(label, count, tone) {
+  const h = el("div", `section-label${tone ? ` ${tone}` : ""}`);
+  h.appendChild(el("span", null, label));
+  if (count !== undefined) h.appendChild(el("span", "section-count", String(count)));
+  return h;
 }
 
-function matchesSearch(text, query) {
-  if (!query) return true;
-  return (text || "").toLowerCase().includes(query);
+function agendaRow(it, nowMs) {
+  const row = el("div", `agenda-row ${it.kind}`);
+  row.style.setProperty("--c", it.color);
+  if (it.kind === "task" && it.overdue) row.classList.add("overdue");
+  if (it.done) row.classList.add("done");
+  if (it.dueMs !== null && !it.overdue && it.dueMs - nowMs <= 48 * 3600e3) row.classList.add("due-soon");
+
+  // Date block
+  const dateBox = el("div", "date-box");
+  if (it.dueMs !== null) {
+    const d = new Date(it.dueMs);
+    dateBox.appendChild(el("span", "dow", d.toLocaleDateString(undefined, { weekday: "short" })));
+    dateBox.appendChild(el("span", "dom", String(d.getDate())));
+    dateBox.title = formatDay(it.dueMs);
+  } else {
+    dateBox.appendChild(el("span", "dom", "—"));
+    dateBox.title = "No due date";
+  }
+  row.appendChild(dateBox);
+
+  // Title + meta
+  const main = el("div", "row-main");
+  const title = el("div", "row-title");
+  appendLinkified(title, it.title);
+  main.appendChild(title);
+
+  const meta = el("div", "row-meta");
+  meta.appendChild(classChip(it));
+  if (it.kind === "event") {
+    meta.appendChild(el("span", `tag-badge ${it.tagClass}`, it.notice.n.tag));
+    if (it.notice.n.time) meta.appendChild(el("span", "meta-text", it.notice.n.time));
+  } else {
+    const bits = [];
+    if (it.dueMs !== null) bits.push(formatDay(it.dueMs) + (it.hasTime ? `, ${formatClock(it.dueMs)}` : ""));
+    if (it.a.details && !/^due\b/i.test(it.a.details)) bits.push(it.a.details);
+    if (bits.length) meta.appendChild(el("span", "meta-text", bits.join(" · ")));
+  }
+  main.appendChild(meta);
+  row.appendChild(main);
+
+  // Countdown + done toggle
+  const side = el("div", "row-side");
+  if (it.dueMs !== null || it.overdue) {
+    const cd = it.dueMs !== null && !(it.overdue && it.dueMs > nowMs)
+      ? countdown(it.dueMs, nowMs, { dayOnly: it.kind === "event" })
+      : "past due";
+    side.appendChild(el("span", "countdown", cd));
+  }
+  if (it.kind === "task") {
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.className = "done-box";
+    box.checked = it.done;
+    box.title = it.done ? "Mark as not done" : "Mark as done (only hides it here; Teams is not changed)";
+    box.setAttribute("aria-label", `${it.done ? "Undo done" : "Mark done"}: ${it.title}`);
+    box.addEventListener("change", () => {
+      if (box.checked) doneSet.add(it.key); else doneSet.delete(it.key);
+      saveUiSet(UI_DONE_KEY, doneSet);
+      applyFiltersAndRender();
+    });
+    side.appendChild(box);
+  }
+  row.appendChild(side);
+  return row;
+}
+
+function noticeCard(it, nowMs) {
+  const n = it.n;
+  const card = el("article", `notice-card${it.unread ? " unread" : ""}`);
+  card.style.setProperty("--c", it.color);
+
+  const top = el("div", "notice-top");
+  top.appendChild(classChip(it));
+  if (it.tagClass !== "notice") top.appendChild(el("span", `tag-badge ${it.tagClass}`, n.tag));
+  if (it.unread) top.appendChild(el("span", "new-pill", "New"));
+  top.appendChild(el("span", "spacer"));
+  const when = el("span", "notice-when", it.postedMs ? formatRelativeTime(n.timestampIso) : (n.originalTimestamp || ""));
+  if (n.originalTimestamp) when.title = n.originalTimestamp;
+  top.appendChild(when);
+  card.appendChild(top);
+
+  const text = el("div", "notice-text clamp");
+  appendLinkified(text, n.summary || n.subject || "No text provided");
+  card.appendChild(text);
+
+  const foot = el("div", "notice-foot");
+  const dayMs = parseLocalDate(n.date);
+  if (dayMs !== null) {
+    const d = dayDiff(dayMs, nowMs);
+    const rel = d >= 0 ? countdown(dayMs, nowMs, { dayOnly: true }) : `${-d}d ago`;
+    foot.appendChild(el("span", "notice-date", `📅 ${formatDay(dayMs)}${n.time ? `, ${n.time}` : ""} · ${rel}`));
+  }
+  if (n.author) foot.appendChild(el("span", "notice-author", n.author));
+  card.appendChild(foot);
+
+  // Click expands the text and counts as reading it.
+  card.addEventListener("click", () => {
+    text.classList.toggle("clamp");
+    if (it.unread) {
+      it.unread = false;
+      readSet.add(it.key);
+      saveUiSet(UI_READ_KEY, readSet);
+      card.classList.remove("unread");
+      const pill = card.querySelector(".new-pill");
+      if (pill) pill.remove();
+      updateUnreadCount();
+    }
+  });
+  return card;
+}
+
+let lastModel = null;
+
+function updateUnreadCount() {
+  if (!lastModel) return;
+  const unread = lastModel.notices.filter((x) => x.unread).length;
+  setCount(countNotices, unread);
+}
+
+function setCount(node, n, tone) {
+  node.textContent = n;
+  node.classList.toggle("zero", n === 0);
+  node.classList.toggle("alert", Boolean(tone) && n > 0);
+}
+
+function appendBucket(list, label, items, nowMs, tone) {
+  if (items.length === 0) return;
+  list.appendChild(sectionHeader(label, items.length, tone));
+  for (const it of items) list.appendChild(agendaRow(it, nowMs));
+}
+
+function appendOverdue(list, items, nowMs) {
+  if (items.length === 0) return;
+  const cutoff = nowMs - OLD_OVERDUE_DAYS * DAY_MS;
+  const recent = items.filter((it) => it.dueMs === null || it.dueMs >= cutoff);
+  const old = items.filter((it) => it.dueMs !== null && it.dueMs < cutoff);
+  list.appendChild(sectionHeader("Overdue", items.length, "danger"));
+  for (const it of recent) list.appendChild(agendaRow(it, nowMs));
+  if (old.length > 0) {
+    if (expanded.oldOverdue) for (const it of old) list.appendChild(agendaRow(it, nowMs));
+    const more = el("button", "more-btn",
+      expanded.oldOverdue ? "Hide older overdue" : `Show ${old.length} older overdue (more than ${OLD_OVERDUE_DAYS} days)`);
+    more.type = "button";
+    more.addEventListener("click", () => { expanded.oldOverdue = !expanded.oldOverdue; applyFiltersAndRender(); });
+    list.appendChild(more);
+  }
+  const hint = el("div", "hint", "Already handed it in? Tick the box to hide it.");
+  list.appendChild(hint);
+}
+
+function renderOverview(list, model, nowMs) {
+  const open = model.tasks.filter((t) => !t.done);
+  const b = bucketize([...open, ...model.events], nowMs);
+  const soon = b.today.length + b.tomorrow.length + b.week.length;
+
+  // One-line summary, the first thing a student reads.
+  const parts = [];
+  if (b.overdue.length) parts.push(`${b.overdue.length} overdue`);
+  if (b.today.length) parts.push(`${b.today.length} today`);
+  if (b.tomorrow.length) parts.push(`${b.tomorrow.length} tomorrow`);
+  if (b.week.length) parts.push(`${b.week.length} later this week`);
+  const summary = el("div", `summary-card${b.overdue.length ? " has-overdue" : ""}`);
+  summary.appendChild(el("div", "summary-title", parts.length ? parts.join(" · ") : "Nothing due this week 🎉"));
+  const nextUp = [...b.today, ...b.tomorrow, ...b.week, ...b.later][0];
+  if (nextUp) {
+    summary.appendChild(el("div", "summary-sub",
+      `Next: ${nextUp.title} (${nextUp.classLabel}) ${countdown(nextUp.dueMs, nowMs, { dayOnly: nextUp.kind === "event" })}`));
+  }
+  list.appendChild(summary);
+
+  appendOverdue(list, b.overdue, nowMs);
+  appendBucket(list, "Today", b.today, nowMs, "warn");
+  appendBucket(list, "Tomorrow", b.tomorrow, nowMs, "warn");
+  appendBucket(list, "This week", b.week, nowMs);
+  appendBucket(list, "Later", b.later, nowMs);
+  appendBucket(list, "No due date", b.undated, nowMs);
+
+  // Unread announcements not already on the agenda.
+  const onAgenda = new Set(model.events.map((e) => e.key));
+  const fresh = model.notices.filter((x) => x.unread && !onAgenda.has(x.key));
+  if (fresh.length) {
+    list.appendChild(sectionHeader("New announcements", fresh.length));
+    for (const it of fresh.slice(0, OVERVIEW_UPDATES)) list.appendChild(noticeCard(it, nowMs));
+    if (fresh.length > OVERVIEW_UPDATES) {
+      const more = el("button", "more-btn", `See all ${fresh.length} new in Updates →`);
+      more.type = "button";
+      more.addEventListener("click", () => selectTab("notices"));
+      list.appendChild(more);
+    }
+  }
+  return soon + b.overdue.length;
+}
+
+function renderTasks(list, model, nowMs) {
+  const open = model.tasks.filter((t) => !t.done);
+  const done = model.tasks.filter((t) => t.done);
+  const b = bucketize(open, nowMs);
+
+  if (open.length === 0) list.appendChild(el("div", "summary-card", "No open assignments 🎉"));
+  appendOverdue(list, b.overdue, nowMs);
+  appendBucket(list, "Today", b.today, nowMs, "warn");
+  appendBucket(list, "Tomorrow", b.tomorrow, nowMs, "warn");
+  appendBucket(list, "This week", b.week, nowMs);
+  appendBucket(list, "Later", b.later, nowMs);
+  appendBucket(list, "No due date", b.undated, nowMs);
+
+  if (done.length) {
+    const more = el("button", "more-btn", expanded.done ? `Hide ${done.length} done` : `✓ ${done.length} marked done — show`);
+    more.type = "button";
+    more.addEventListener("click", () => { expanded.done = !expanded.done; applyFiltersAndRender(); });
+    list.appendChild(more);
+    if (expanded.done) for (const it of done) list.appendChild(agendaRow(it, nowMs));
+  }
+}
+
+function renderUpdates(list, model, nowMs) {
+  const unread = model.notices.filter((x) => x.unread);
+  const bar = el("div", "updates-bar");
+  bar.appendChild(el("span", null, unread.length ? `${unread.length} unread` : "All caught up"));
+  if (unread.length) {
+    const markAll = el("button", "link-btn", "Mark all as read");
+    markAll.type = "button";
+    markAll.addEventListener("click", () => {
+      for (const it of unread) readSet.add(it.key);
+      saveUiSet(UI_READ_KEY, readSet);
+      applyFiltersAndRender();
+    });
+    bar.appendChild(markAll);
+  }
+  list.appendChild(bar);
+
+  const groups = [["Today", []], ["Yesterday", []], ["This week", []], ["Earlier", []]];
+  for (const it of model.notices) {
+    const d = it.postedMs === null ? -999 : dayDiff(it.postedMs, nowMs);
+    const idx = d >= 0 ? 0 : d === -1 ? 1 : d >= -7 ? 2 : 3;
+    groups[idx][1].push(it);
+  }
+  for (const [label, items] of groups) {
+    if (!items.length) continue;
+    list.appendChild(sectionHeader(label, items.length));
+    for (const it of items) list.appendChild(noticeCard(it, nowMs));
+  }
 }
 
 function applyFiltersAndRender() {
-  if (!rawDigestData || !rawDigestData.classes) {
+  if (!rawDigestData || !rawDigestData.classes || rawDigestData.classes.length === 0) {
     setView("no-data");
     return;
   }
 
-  const selectedClass = classFilter.value;
-  const selectedTime  = timeFilter.value;
-  const searchQuery   = searchInput.value.trim().toLowerCase();
+  const nowMs = Date.now();
+  const model = buildModel(nowMs);
+  lastModel = model;
 
-  let globalTotalNotices = 0;
-  let globalTotalTasks   = 0;
-  let visibleClassesCount = 0;
+  // Counts are "things that need you", not totals.
+  const open = model.tasks.filter((t) => !t.done);
+  const attention = open.filter((t) => t.overdue || (t.dueMs !== null && dayDiff(t.dueMs, nowMs) <= 7)).length +
+    model.events.filter((e) => dayDiff(e.dueMs, nowMs) <= 7).length;
+  setCount(countAll, attention, open.some((t) => t.overdue));
+  setCount(countAssignments, open.length);
+  setCount(countNotices, model.notices.filter((x) => x.unread).length);
+
+  const filtering = Boolean(model.query) || selectedClass !== "all";
+  if (model.tasks.length === 0 && model.notices.length === 0) {
+    setView(filtering ? "filter-empty" : "no-data");
+    return;
+  }
 
   classList.replaceChildren();
+  if (activeTab === "assignments") renderTasks(classList, model, nowMs);
+  else if (activeTab === "notices") renderUpdates(classList, model, nowMs);
+  else renderOverview(classList, model, nowMs);
 
-  for (const c of rawDigestData.classes) {
-    // Check class filter (against the raw key — see updateClassDropdown)
-    const classKey = c.key || c.rawClassName || c.className;
-    const matchesClassFilter = (selectedClass === "all" || classKey === selectedClass);
-
-    // Filter Notices for this class
-    const matchingNotices = (c.notices || []).filter((notice) => {
-      if (!matchesTimeFilter(notice.timestampIso, selectedTime)) return false;
-      if (searchQuery) {
-        const fullContent = `${notice.tag} ${notice.summary} ${notice.subject || ""} ${notice.author || ""} ${notice.date || ""}`.toLowerCase();
-        return matchesSearch(fullContent, searchQuery);
-      }
-      return true;
-    });
-
-    // Filter Assignments for this class — the SAME filters as notices, so the
-    // two halves of the view can't disagree about what's being shown.
-    const matchingAssignments = (c.assignments || []).filter((assignment) => {
-      if (!assignmentMatchesTimeFilter(assignment, selectedTime)) return false;
-      if (searchQuery) {
-        const fullContent = `${assignment.title} ${assignment.details} ${assignment.tab}`.toLowerCase();
-        return matchesSearch(fullContent, searchQuery);
-      }
-      return true;
-    });
-
-    // Class filter applies BEFORE the tab counts are accumulated — otherwise
-    // selecting one class leaves the All / Notices / Tasks badges showing
-    // totals for every class.
-    if (!matchesClassFilter) continue;
-
-    globalTotalNotices += matchingNotices.length;
-    globalTotalTasks   += matchingAssignments.length;
-
-    // Check which sections to show based on activeTab
-    const showNotices = (activeTab === "all" || activeTab === "notices") && matchingNotices.length > 0;
-    const showTasks   = (activeTab === "all" || activeTab === "assignments") && matchingAssignments.length > 0;
-
-    if (!showNotices && !showTasks) continue;
-
-    visibleClassesCount++;
-
-    const isCollapsed = Boolean(collapsedState[classKey]);
-
-    // Render Class Card
-    const card = document.createElement("div");
-    card.className = isCollapsed ? "class-card collapsed" : "class-card";
-
-    // Header
-    const header = document.createElement("div");
-    header.className = "class-header";
-
-    const left = document.createElement("div");
-    left.className = "class-header-left";
-
-    const courseCode = document.createElement("span");
-    courseCode.className = "course-code";
-    // displayName carries the section suffix when two teams share a course
-    // code, so "CSE 312 (V1)" and "CSE 312 (V2)" stay tellable apart.
-    courseCode.textContent = c.displayName || c.className;
-    courseCode.title = c.rawClassName || c.className;
-    left.appendChild(courseCode);
-
-    const badges = document.createElement("div");
-    badges.className = "class-badges";
-
-    if (matchingNotices.length > 0) {
-      const nBadge = document.createElement("span");
-      nBadge.className = "badge-count notices";
-      nBadge.textContent = `📢 ${matchingNotices.length}`;
-      badges.appendChild(nBadge);
-    }
-
-    if (matchingAssignments.length > 0) {
-      const aBadge = document.createElement("span");
-      aBadge.className = "badge-count tasks";
-      aBadge.textContent = `📝 ${matchingAssignments.length}`;
-      badges.appendChild(aBadge);
-    }
-
-    left.appendChild(badges);
-    header.appendChild(left);
-
-    const chevron = document.createElement("span");
-    chevron.className = "collapse-icon";
-    chevron.textContent = "▼";
-    header.appendChild(chevron);
-
-    // Toggle collapse — reachable by keyboard, and announced to screen readers.
-    // A bare click handler on a div has neither.
-    header.setAttribute("role", "button");
-    header.setAttribute("tabindex", "0");
-    header.setAttribute("aria-expanded", isCollapsed ? "false" : "true");
-    header.setAttribute("aria-label", `Toggle ${c.displayName || c.className}`);
-
-    const toggleCollapse = () => {
-      const collapsed = card.classList.toggle("collapsed");
-      header.setAttribute("aria-expanded", collapsed ? "false" : "true");
-      saveCollapseState(classKey, collapsed);
-    };
-
-    header.addEventListener("click", toggleCollapse);
-    header.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        toggleCollapse();
-      }
-    });
-
-    card.appendChild(header);
-
-    // Body
-    const body = document.createElement("div");
-    body.className = "class-body";
-
-    // 1. Announcements section for this class
-    if (showNotices) {
-      const secLabel = document.createElement("div");
-      secLabel.className = "section-label";
-      setSectionLabel(secLabel, "📢", `Announcements & Notices (${matchingNotices.length})`);
-      body.appendChild(secLabel);
-
-      for (const notice of matchingNotices) {
-        const item = document.createElement("div");
-        item.className = "notice-card";
-
-        // Meta row: Tag badge + date/time chips + new indicator
-        const metaRow = document.createElement("div");
-        metaRow.className = "notice-meta-row";
-
-        const tag = document.createElement("span");
-        tag.className = `tag-badge ${getTagClass(notice.tag)}`;
-        tag.textContent = notice.tag || "📢 Notice";
-        metaRow.appendChild(tag);
-
-        if (notice.isNew) {
-          const newPill = document.createElement("span");
-          newPill.className = "new-pill";
-          newPill.textContent = "NEW";
-          metaRow.appendChild(newPill);
-        }
-
-        if (notice.date) {
-          const dateChip = document.createElement("span");
-          dateChip.className = "chip-meta";
-          dateChip.textContent = `📅 ${notice.date}`;
-          metaRow.appendChild(dateChip);
-        }
-
-        if (notice.time) {
-          const timeChip = document.createElement("span");
-          timeChip.className = "chip-meta";
-          timeChip.textContent = `⏰ ${notice.time}`;
-          metaRow.appendChild(timeChip);
-        }
-
-        item.appendChild(metaRow);
-
-        // Content
-        const content = document.createElement("div");
-        content.className = "notice-text";
-        content.textContent = notice.summary || notice.subject || "No text provided";
-        item.appendChild(content);
-
-        // Author & source
-        const author = document.createElement("div");
-        author.className = "notice-author";
-        const authorParts = [];
-        if (notice.author) authorParts.push(notice.author);
-        if (notice.originalTimestamp) authorParts.push(notice.originalTimestamp);
-        author.textContent = authorParts.join(" · ");
-        item.appendChild(author);
-
-        body.appendChild(item);
-      }
-    }
-
-    // 2. Assignments section for this class
-    if (showTasks) {
-      const secLabel = document.createElement("div");
-      secLabel.className = "section-label";
-      setSectionLabel(secLabel, "📝", `Assignments (${matchingAssignments.length})`);
-      body.appendChild(secLabel);
-
-      for (const a of matchingAssignments) {
-        const item = document.createElement("div");
-        item.className = "assignment-card";
-
-        const dateStr = a.dueIso || a.dueDate;
-        if (dateStr) {
-          const dueTime = new Date(dateStr).getTime();
-          if (!isNaN(dueTime)) {
-            const diffMs = dueTime - Date.now();
-            if (diffMs >= 0 && diffMs <= 48 * 3600 * 1000) {
-              item.classList.add("due-soon");
-            }
-          }
-        }
-
-        const headerRow = document.createElement("div");
-        headerRow.className = "assignment-header-row";
-
-        const title = document.createElement("span");
-        title.className = "assignment-title";
-        title.textContent = a.title || "Untitled Assignment";
-        headerRow.appendChild(title);
-
-        const statusBadge = document.createElement("span");
-        const isPastDue = (a.tab === "Past due");
-        statusBadge.className = `assignment-status-badge ${isPastDue ? "past-due" : "upcoming"}`;
-        statusBadge.textContent = a.tab || "Pending";
-        headerRow.appendChild(statusBadge);
-
-        item.appendChild(headerRow);
-
-        if (a.dueDate || a.details) {
-          const dueText = document.createElement("div");
-          dueText.className = "assignment-due-text";
-          dueText.textContent = a.dueDate ? `📅 Due ${a.dueDate}${a.details ? ` · ${a.details}` : ""}` : a.details;
-          item.appendChild(dueText);
-        }
-
-        body.appendChild(item);
-      }
-    }
-
-    card.appendChild(body);
-    classList.appendChild(card);
-  }
-
-  // Update counts on category tabs
-  countAll.textContent         = globalTotalNotices + globalTotalTasks;
-  countNotices.textContent     = globalTotalNotices;
-  countAssignments.textContent = globalTotalTasks;
-
-  // Empty state handling
-  if (visibleClassesCount === 0) {
-    if (searchQuery || selectedClass !== "all" || selectedTime !== "all") {
-      setView("filter-empty");
-    } else {
-      setView("no-data");
-    }
-  } else {
-    setView("feed");
-  }
+  feedActions.hidden = activeTab === "notices";
+  setView("feed");
 }
 
 // ---------------------------------------------------------------------------
 // Event Listeners
 // ---------------------------------------------------------------------------
 
-// Tab Switching
-function handleTabClick(tabKey, activeBtn) {
+const TAB_BUTTONS = { all: tabAll, notices: tabNotices, assignments: tabAssignments };
+
+function selectTab(tabKey) {
   activeTab = tabKey;
-  [tabAll, tabNotices, tabAssignments].forEach((b) => b.classList.remove("active"));
-  activeBtn.classList.add("active");
+  for (const [key, btn] of Object.entries(TAB_BUTTONS)) {
+    btn.classList.toggle("active", key === tabKey);
+    btn.setAttribute("aria-selected", key === tabKey ? "true" : "false");
+  }
   applyFiltersAndRender();
+  document.getElementById("mainContent").scrollTop = 0;
 }
 
-tabAll.addEventListener("click", () => handleTabClick("all", tabAll));
-tabNotices.addEventListener("click", () => handleTabClick("notices", tabNotices));
-tabAssignments.addEventListener("click", () => handleTabClick("assignments", tabAssignments));
-
-// Filters
-classFilter.addEventListener("change", applyFiltersAndRender);
-timeFilter.addEventListener("change", applyFiltersAndRender);
+tabAll.addEventListener("click", () => selectTab("all"));
+tabNotices.addEventListener("click", () => selectTab("notices"));
+tabAssignments.addEventListener("click", () => selectTab("assignments"));
 
 // Search
 searchInput.addEventListener("input", () => {
-  if (searchInput.value.length > 0) {
-    clearSearchBtn.classList.remove("hidden");
-  } else {
-    clearSearchBtn.classList.add("hidden");
-  }
+  clearSearchBtn.classList.toggle("hidden", searchInput.value.length === 0);
   applyFiltersAndRender();
 });
 
@@ -619,21 +843,15 @@ clearSearchBtn.addEventListener("click", () => {
   searchInput.focus();
 });
 
-// Toggle Filter Bar
-filterToggleBtn.addEventListener("click", () => {
-  const isHidden = controlsBar.classList.toggle("hidden");
-  controlsBar.hidden = isHidden;
-  filterToggleBtn.setAttribute("aria-expanded", isHidden ? "false" : "true");
-  filterToggleBtn.classList.toggle("active", !isHidden);
-  if (!isHidden) {
-    searchInput.focus();
-  }
-});
+function togglePanel(panel, btn, onOpen) {
+  panel.hidden = !panel.hidden;
+  btn.setAttribute("aria-expanded", panel.hidden ? "false" : "true");
+  btn.classList.toggle("active", !panel.hidden);
+  if (!panel.hidden && onOpen) onOpen();
+}
 
-// Reload from storage
-refreshBtn.addEventListener("click", () => {
-  loadData(false);
-});
+filterToggleBtn.addEventListener("click", () => togglePanel(controlsBar, filterToggleBtn, () => searchInput.focus()));
+settingsBtn.addEventListener("click", () => togglePanel(settingsPanel, settingsBtn));
 
 // Clear stored data (two-step confirm)
 clearDataBtn.addEventListener("click", async () => {
@@ -648,7 +866,7 @@ clearDataBtn.addEventListener("click", async () => {
   try {
     await clearAllData();
   } finally {
-    loadData(false);
+    loadData();
   }
 });
 
@@ -663,17 +881,26 @@ clearDataBtn.addEventListener("click", async () => {
 
 let syncWatchdog = null;
 
+function setSyncing(on) {
+  syncAllBtn.disabled = on;
+  syncIcon.classList.toggle("spinning", on);
+}
+
 function renderSyncStatus(s) {
   // A "running" status that stopped updating means the tab was closed mid-sync.
   const abandoned = s && s.state === "running" && Date.now() - Date.parse(s.at) > 120000;
-  if (!s || abandoned) { syncStatus.textContent = ""; syncAllBtn.disabled = false; return; }
+  if (!s || abandoned) { syncStatus.textContent = ""; setSyncing(false); return; }
   if (syncWatchdog) { clearTimeout(syncWatchdog); syncWatchdog = null; }
   if (s.state === "running") {
     syncStatus.textContent = s.phase === "assignments" ? "Capturing assignments…"
-      : s.total ? `Syncing ${s.done + s.failed + 1} of ${s.total}…` : "Syncing…";
+      : s.total ? `Syncing class ${s.done + s.failed + 1} of ${s.total}… keep the Teams tab open.` : "Syncing…";
   }
   else if (s.state === "done") {
-    syncStatus.textContent = `Synced ${s.done} of ${s.total} classes` + (s.failed ? ` (${s.failed} failed)` : "") +
+    // A clean sync needs no standing message — the "Updated …" footer says it.
+    const clean = !s.failed && s.assignments === "ok";
+    const recent = Date.now() - Date.parse(s.at) < 60000;
+    syncStatus.textContent = clean && !recent ? "" :
+      `Synced ${s.done} of ${s.total} classes` + (s.failed ? ` (${s.failed} failed)` : "") +
       (s.assignments === "ok" ? " + assignments."
         : s.assignments === "partial" ? " + assignments (some tabs didn't load; their stored items were kept — see Capture details)."
         : s.assignments === "failed" ? " — assignments capture failed; nothing overwritten (see Capture details)."
@@ -681,7 +908,7 @@ function renderSyncStatus(s) {
         : s.assignments ? " — no assignments capture reported (the Assignments app didn't load)." : ".");
   }
   else if (s.state === "error") syncStatus.textContent = SYNC_REASONS[s.reason] || "Sync failed.";
-  syncAllBtn.disabled = s.state === "running";
+  setSyncing(s.state === "running");
 }
 
 syncAllBtn.addEventListener("click", async () => {
@@ -725,12 +952,14 @@ document.getElementById("exportIcsBtn").addEventListener("click", () => {
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 10000);
   syncStatus.textContent = `Exported ${exported} assignment${exported === 1 ? "" : "s"}` +
-    (skippedUndated ? ` (${skippedUndated} undated skipped).` : ".");
+    (skippedUndated ? ` (${skippedUndated} undated skipped).` : ".") +
+    " Open the file to add them to your calendar.";
 });
 
 // ── Capture details: the last assignments capture report ────────────────────
 // Numbers and fixed reason codes only (sanitized by the background); shown
-// with textContent and copied on request so the owner can share it.
+// with textContent and copied on request so the owner can share it. Only
+// shown when the last capture had a problem — otherwise it is noise.
 const captureDetails = document.getElementById("captureDetails");
 const captureSummary = document.getElementById("captureSummary");
 const captureReport  = document.getElementById("captureReport");
@@ -755,10 +984,10 @@ function formatCaptureReport(r) {
 
 function renderCaptureReport(r) {
   lastCaptureReport = r || null;
-  captureDetails.hidden = !r;
+  const bg = (r && r.background) || {};
+  const warn = Boolean(r) && (r.status !== "ok" || !bg.accepted || bg.health === "no-known-classes");
+  captureDetails.hidden = !warn;
   if (!r) return;
-  const bg = r.background || {};
-  const warn = r.status !== "ok" || !bg.accepted || bg.health === "no-known-classes";
   captureSummary.textContent = `Capture details${warn ? " ⚠" : ""}`;
   captureReport.textContent = formatCaptureReport(r);
 }
@@ -791,10 +1020,10 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 });
 
 document.addEventListener("DOMContentLoaded", () => {
-  loadData(false);
+  loadData();
 
-  // Relative "Last capture" text and the 36 h stale check age with time.
-  tickerInterval = setInterval(() => loadData(true), 60000);
+  // Relative times, countdowns and the 36 h stale check age with time.
+  tickerInterval = setInterval(() => loadData(), 60000);
 });
 
 window.addEventListener("unload", () => {

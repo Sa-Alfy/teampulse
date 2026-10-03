@@ -57,8 +57,19 @@ function formatDate(year, month, day) {
 function extractDate(text, fallbackYear) {
   if (!text) return null;
 
+  // ── ISO: YYYY-MM-DD (also YYYY/MM/DD) ─────────────────────────────────────
+  // Year-first is unambiguous, so no day/month rescue. Restricted to 19xx/20xx
+  // so long digit runs (ids, phone numbers) aren't read as dates; the (?!\d)
+  // still accepts "2026-10-07T09:30".
+  let m = text.match(/(?<!\d)((?:19|20)\d{2})[-\/](\d{1,2})[-\/](\d{1,2})(?!\d)/);
+  if (m) {
+    const [year, month, day] = [m[1], m[2], m[3]].map((s) => parseInt(s, 10));
+    if (isRealDate(year, month, day)) return formatDate(year, month, day);
+    return null;
+  }
+
   // ── Numeric: DD.MM.YYYY (with MM/DD/YYYY rescue) ──────────────────────────
-  let m = text.match(/\b(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{4})\b/);
+  m = text.match(/\b(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{4})\b/);
   if (m) {
     let day = parseInt(m[1], 10);
     let month = parseInt(m[2], 10);

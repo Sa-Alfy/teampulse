@@ -3,7 +3,7 @@
 > **Turn chaotic Microsoft Teams courses into a clean, automated academic briefing.**  
 > Scrapes classes, tracks assignments, extracts Class Test (CT) dates, and delivers a unified daily digest — showing only what's **new since the last run**.
 > 
-> **Status (2026-10-03, [v0.6.7 pre-release](https://github.com/Sa-Alfy/teampulse/releases/tag/v0.6.7)):** the browser extension works on its own — no server, no Node.js. Live capture of channel posts and "Sync all classes" have been confirmed working on `teams.cloud.microsoft` by the owner (one student account). Assignment capture was reworked in v0.6.4–0.6.7 (see [CHANGELOG](CHANGELOG.md)): on real Teams (one student account) a v0.6.5 capture was accepted with Past due items listed, while the v0.6.6–0.6.7 fixes are tested only against local mock pages. Not on the Chrome Web Store.
+> **Status (2026-10-03, v0.7.0, not yet released; latest release [v0.6.7 pre-release](https://github.com/Sa-Alfy/teampulse/releases/tag/v0.6.7)):** the browser extension works on its own — no server, no Node.js. Live capture of channel posts and "Sync all classes" have been confirmed working on `teams.cloud.microsoft` by the owner (one student account). Assignment capture was reworked in v0.6.4–0.6.7 (see [CHANGELOG](CHANGELOG.md)): on real Teams (one student account) a v0.6.5 capture was accepted with Past due items listed, while the v0.6.6–0.6.7 fixes are tested only against local mock pages. Not on the Chrome Web Store.
 
 ---
 
@@ -80,10 +80,10 @@ Both paths share the same parsing rules (`extension/core/digest-utils.js`) and p
 - [x] **Storage & Deduplication**: SQLite (`teamspulse.db`) stores a SHA-256 fingerprint for every processed post. On the next run, already-seen posts are silently skipped — only genuinely new content appears in the digest.
 - [x] **Resilient UI Selectors**: Bypasses unstable Fluent UI atomic class names by anchoring to semantic `data-testid` / `data-test` / ARIA attributes.
 - [x] **Standalone Chrome / Edge extension**: popup reads `chrome.storage.local` — no server or Node.js. Live-updates as you browse Teams; toolbar badge counts new posts (24 h window).
-- [x] **Sync all classes**: opens each class in your Teams tab, then the Assignments app (all classes' assignments, scrolled through), captures it all, and returns you where you were (hidden teams skipped). Runs on click, and automatically once when Teams opens (at most every 6 h; untick **Auto-sync** in the popup to stop it). Confirmed on live Teams by the owner (2026-10-01).
+- [x] **Sync all classes**: opens each class in your Teams tab, then the Assignments app (all classes' assignments, scrolled through), captures it all, and returns you where you were (hidden teams skipped). Runs on click, and automatically once when Teams opens (at most every 6 h; untick **Auto-sync** under ⚙ in the popup to stop it). Confirmed on live Teams by the owner (2026-10-01).
 - [x] **Scraper health**: if Teams changes its page and capture stops working, the popup says "Scraper may be out of date" instead of quietly showing old data.
 - [x] **Clear stored data**: one button wipes everything the extension stored.
-- [x] **Capture details** (v0.6.4): the popup shows the last assignments capture report — per-tab counts and reason codes only, no titles or class names — with **Copy report** for troubleshooting.
+- [x] **Capture details** (v0.6.4; since v0.7.0 shown only when the last capture had a problem): the popup shows the last assignments capture report — per-tab counts and reason codes only, no titles or class names — with **Copy report** for troubleshooting.
 - [x] **Export assignments (.ics)**: download a calendar file of dated assignments, generated on your device (`extension/core/ics.js`); import it into Google Calendar, Outlook or Apple Calendar. Re-importing updates events instead of duplicating them.
 - [x] **Telegram Bot** (self-host): morning briefing push notifications.
 
@@ -208,12 +208,15 @@ Since v0.6.0 the browser extension no longer reads this API — it keeps its own
 
 ## 🧩 Popup features
 
-* 📚 **Categorized by Class**: Notices and assignments grouped under each enrolled course.
-* 📑 **Category Switcher**: Tabs for **All**, **📢 Notices**, and **📝 Tasks**.
-* 🔍 **Collapsible Filter Bar**: Class/time filters and search, hidden by default.
+Since v0.7.0 (see [CHANGELOG](CHANGELOG.md)):
+
+* 🗓️ **Overview**: a one-line summary ("2 overdue · 1 today"), then everything by urgency: Overdue → Today → Tomorrow → This week → Later → No due date, with countdowns ("in 2 days", "7h late"). Dated exams, CTs and presentations from announcements appear next to assignments.
+* ✅ **Tasks**: open assignments by due date. Tick one to mark it done; this hides it in TeamsPulse only and does not change Teams.
+* 📢 **Updates**: announcements newest first, grouped by day, with unread marks and **Mark all as read**.
+* 🎨 **Class chips**: one colour per course; tap to filter every tab. 🔍 search is in the header.
+* 🔗 **Links**: `https://` links in posts open in a new tab when clicked; nothing is loaded before that.
 * 🟢 **Fresh / Stale pill**: "Data is old" banner after 36 h without a capture.
-* 🔄 **Sync all classes** and **Clear stored data** buttons.
-* ⏳ **Due-Soon Urgency**: Assignments due within 48 h get an amber highlight.
+* 🔄 **Sync** in the header; **Auto-sync** under ⚙; **Clear stored data** in the footer.
 * 🛡️ **Untrusted text stays text**: scraped posts are rendered with `textContent` only (tested with XSS payloads).
 
 ---
