@@ -81,7 +81,8 @@ function buildIcs(digest, nowMs) {
       if (Number.isNaN(due)) { skippedUndated++; continue; }
 
       const key = a.assignmentId || icsHash(`${c.rawClassName || label}\u0000${a.title || ""}\u0000${a.dueIso}`);
-      const desc = [a.tab, a.details].filter(Boolean).join(" · ");
+      const details = String(a.details || "").replace(/(\d{1,2}:\d{2}\s?[AP]M)(?=[^\s·])/gi, "$1 · ");
+      const desc = [a.tab, details].filter(Boolean).join(" · ");
       lines.push(
         "BEGIN:VEVENT",
         `UID:${icsEscape(key)}@teamspulse.local`,

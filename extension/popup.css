@@ -804,6 +804,20 @@ body::-webkit-scrollbar-thumb:hover {
   color: #f87171;
 }
 
+.capture-details {
+  margin: 4px 12px;
+  font-size: 11px;
+}
+.capture-details summary { cursor: pointer; }
+.capture-report {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 160px;
+  overflow-y: auto;
+  margin: 4px 0;
+  font-size: 10px;
+}
+
 .sync-bar {
   display: flex;
   align-items: center;

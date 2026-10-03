@@ -675,8 +675,10 @@ function renderSyncStatus(s) {
   else if (s.state === "done") {
     syncStatus.textContent = `Synced ${s.done} of ${s.total} classes` + (s.failed ? ` (${s.failed} failed)` : "") +
       (s.assignments === "ok" ? " + assignments."
+        : s.assignments === "partial" ? " + assignments (some tabs didn't load; their stored items were kept — see Capture details)."
+        : s.assignments === "failed" ? " — assignments capture failed; nothing overwritten (see Capture details)."
         : s.assignments === "no-button" ? " — Assignments app button not found."
-        : s.assignments ? " — no assignments captured (none found, or the list didn't load)." : ".");
+        : s.assignments ? " — no assignments capture reported (the Assignments app didn't load)." : ".");
   }
   else if (s.state === "error") syncStatus.textContent = SYNC_REASONS[s.reason] || "Sync failed.";
   syncAllBtn.disabled = s.state === "running";
@@ -726,8 +728,64 @@ document.getElementById("exportIcsBtn").addEventListener("click", () => {
     (skippedUndated ? ` (${skippedUndated} undated skipped).` : ".");
 });
 
+// ── Capture details: the last assignments capture report ────────────────────
+// Numbers and fixed reason codes only (sanitized by the background); shown
+// with textContent and copied on request so the owner can share it.
+const captureDetails = document.getElementById("captureDetails");
+const captureSummary = document.getElementById("captureSummary");
+const captureReport  = document.getElementById("captureReport");
+const copyReportBtn  = document.getElementById("copyReportBtn");
+let lastCaptureReport = null;
+
+function formatCaptureReport(r) {
+  const yn = (b) => (b ? "y" : "n");
+  const bg = r.background || {};
+  const lines = [
+    `TeamsPulse ${chrome.runtime.getManifest ? chrome.runtime.getManifest().version : ""} capture report`,
+    `received ${r.receivedAt || "?"} · trigger ${r.trigger || "?"} · scope ${r.scope || "?"}`,
+    `status ${r.status}${r.reason ? ` (${r.reason})` : ""} · ready ${r.readyWaitResult || "-"} · hidden ${yn(r.documentHidden)} · rendered ${yn(r.rendered)} · cards sent ${r.cardsSent || 0}`,
+    `background: ${bg.accepted ? "accepted" : "rejected"}${bg.reason ? ` (${bg.reason})` : ""}` +
+      (bg.okTabs ? ` · ok tabs ${bg.okTabs.join(", ") || "none"} · classes written ${bg.classesWritten} · unmatched ${bg.unmatched} · ${bg.classValidation}` : ""),
+  ];
+  for (const t of r.tabs || []) {
+    lines.push(`${t.tab}: ${t.status}${t.reason ? ` (${t.reason})` : ""} · found ${yn(t.tabFound)} clicked ${yn(t.clicked)} selected ${yn(t.selectedConfirmed)} changed ${yn(t.cardsChangedConfirmed)} loaded ${yn(t.listLoaded)} · raw ${t.cardsRaw} hidden ${t.droppedHidden} stale ${t.droppedStale} relative ${t.droppedByRelativeFilter} deduped ${t.dedupedOut} kept ${t.kept}`);
+  }
+  return lines.join("\n");
+}
+
+function renderCaptureReport(r) {
+  lastCaptureReport = r || null;
+  captureDetails.hidden = !r;
+  if (!r) return;
+  const bg = r.background || {};
+  const warn = r.status !== "ok" || !bg.accepted || bg.health === "unmatched-classes";
+  captureSummary.textContent = `Capture details${warn ? " ⚠" : ""}`;
+  captureReport.textContent = formatCaptureReport(r);
+}
+
+copyReportBtn.addEventListener("click", async () => {
+  if (!lastCaptureReport) return;
+  const text = `${formatCaptureReport(lastCaptureReport)}\n\n${JSON.stringify(lastCaptureReport, null, 2)}`;
+  try {
+    await navigator.clipboard.writeText(text);
+    copyReportBtn.textContent = "Copied";
+  } catch (_) {
+    // Fallback: select the visible report so Ctrl+C works.
+    const range = document.createRange();
+    range.selectNodeContents(captureReport);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    copyReportBtn.textContent = "Selected — press Ctrl+C";
+  }
+  setTimeout(() => { copyReportBtn.textContent = "Copy report"; }, 2500);
+});
+
+chrome.storage.local.get([TP.KEY_CAPTURE_REPORT], (res) => renderCaptureReport(res && res[TP.KEY_CAPTURE_REPORT]));
+
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "local") return;
+  if (changes[TP.KEY_CAPTURE_REPORT]) renderCaptureReport(changes[TP.KEY_CAPTURE_REPORT].newValue);
   if (changes[SYNC_STATUS_KEY]) renderSyncStatus(changes[SYNC_STATUS_KEY].newValue);
   if (Object.keys(changes).some((k) => k.startsWith(TP.KEY_PREFIX))) scheduleReload();
 });
