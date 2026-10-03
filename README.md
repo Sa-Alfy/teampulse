@@ -15,7 +15,7 @@
 4. Open Microsoft Teams in that browser (reload the tab if it was already open) and visit your classes — or click **Sync all classes** in the popup.
 5. Click the ⚡ icon for your briefing. Everything stays in your browser; the extension makes no network requests.
 
-Self-hosting the Playwright scraper, digest and Telegram bot is optional — see [Advanced: self-host](#-advanced-self-host-playwright--digest--telegram).
+Self-hosting the Playwright scraper, digest and Telegram bot is optional, advanced, and not recently verified — see [Advanced: self-host](#-advanced-self-host-playwright--digest--telegram).
 
 ---
 
@@ -51,7 +51,7 @@ flowchart LR
 - CSP for extension pages: `connect-src 'none'` — the popup cannot make network requests.
 - Content scripts run only on `teams.microsoft.com`, `teams.cloud.microsoft` and `assignments.edu.cloud.microsoft`.
 
-### Self-host pipeline (advanced, optional)
+### Self-host pipeline (advanced, optional; not recently verified)
 
 ```mermaid
 flowchart LR
@@ -85,7 +85,7 @@ Both paths share the same parsing rules (`extension/core/digest-utils.js`) and p
 - [x] **Clear stored data**: one button wipes everything the extension stored.
 - [x] **Capture details** (v0.6.4; since v0.7.0 shown only when the last capture had a problem): the popup shows the last assignments capture report — per-tab counts and reason codes only, no titles or class names — with **Copy report** for troubleshooting.
 - [x] **Export assignments (.ics)**: download a calendar file of dated assignments, generated on your device (`extension/core/ics.js`); import it into Google Calendar, Outlook or Apple Calendar. Re-importing updates events instead of duplicating them.
-- [x] **Telegram Bot** (self-host): morning briefing push notifications.
+- [ ] **Telegram Bot** (self-host): morning briefing push notifications (not recently verified).
 
 ---
 
@@ -125,9 +125,9 @@ teampulse/
 
 ---
 
-## 🛠 Advanced: self-host (Playwright + digest + Telegram)
+## 🛠 Advanced: self-host (Playwright + digest + Telegram; not recently verified)
 
-Optional. Runs the scraper on your machine on a schedule and produces `digest.md`, a Telegram push and a local JSON API. Not needed for the extension.
+Optional and advanced. This path has not been recently verified. It runs the scraper on your machine on a schedule and produces `digest.md`, a Telegram push and a local JSON API. Not needed for the extension.
 
 ### 1. Prerequisites
 - **Node.js** v24 or higher — the dedup store uses the built-in `node:sqlite`
@@ -271,7 +271,7 @@ surfaced posts count as seen, so loosening the classifier later can still recove
 - [x] **SQLite storage & deduplication** — SHA-256 fingerprint per post, skips seen items.
 
 ### ✅ Phase 3: Client Interface
-- [x] **Telegram Push**: Morning briefing via `notify.js`.
+- [ ] **Telegram Push**: Morning briefing via `notify.js` (not recently verified).
 
 ### ✅ Phase 4: Standalone Extension (v0.6.0)
 - [x] Browser-safe core (`extension/core/`), shared with the Node pipeline
