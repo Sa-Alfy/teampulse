@@ -574,6 +574,53 @@ async function main() {
     await ctx.close();
   });
 
+  // ── v0.6.4 regressions on the higher-fidelity mock (assignments-matrix.js) ──
+  // Evidence (2026-10-01 .ics): stale Upcoming read → every Past due item
+  // again as Upcoming +1 year; v0.6.1–0.6.3: nothing captured.
+  console.log("\nassignments mock matrix:");
+  const matrix = require("./assignments-matrix");
+  const clean = (r) => {
+    assert.strictEqual(r.missing, 0, `missing ${r.missing}/${r.expected}`);
+    for (const k of ["dup", "wrongTab", "wrongDate", "wrongClass"]) assert.strictEqual(r[k], 0, `${k}=${r[k]}`);
+    assert.strictEqual(r.status, "ok");
+  };
+  const byName = (n) => matrix.SCENARIOS.find((s) => s.name === n);
+  const cases = [
+    ["stale previous-tab cards (2 s) + late load → no cross-tab duplicates, no year shift", "stale 2s + load 3s", clean],
+    ["Upcoming opens empty, its empty text lingers → Past due/Completed still captured", "start Upcoming(empty), stale 800 + load 2s", clean],
+    ["React reuses card nodes across tabs → switch still detected", "index-key node reuse, load 1.5s", clean],
+    ["iframe loads display:none, shown later → deferred, then captured", "iframe display:none, shown at 4s", (r) => {
+      clean(r);
+      assert.strictEqual(r.msgs, 2, "deferred report + capture");
+    }],
+    ["iframe never shown → 'deferred' report, no cards, nothing to overwrite", "iframe hidden, never shown", (r) => {
+      assert.strictEqual(r.status, "deferred");
+      assert.strictEqual(r.cards, 0);
+      assert.strictEqual(r.okTabs, "");
+    }],
+    ["tabs missing (DOM drift) → 'failed' report with reason, no okTabs", "tabs missing (DOM drift)", (r) => {
+      assert.strictEqual(r.status, "failed");
+      assert.strictEqual(r.reasons, "no-tabs-found");
+      assert.strictEqual(r.okTabs, "");
+    }],
+    ["unknown empty-state wording → that tab times out (reported), others ok", "other empty wording", (r) => {
+      assert.strictEqual(r.status, "partial");
+      assert.strictEqual(r.okTabs, "Past due,Completed");
+      assert.strictEqual(r.wrongDate + r.dup + r.wrongClass, 0);
+    }],
+  ];
+  const results = await Promise.all(cases.map(([, n]) => matrix.runScenario(browser, byName(n))));
+  for (let i = 0; i < cases.length; i++) {
+    await runTest(cases[i][0], async () => cases[i][2](results[i]));
+  }
+  await runTest("capture report carries counts and codes only (no titles, no class names)", async () => {
+    const r = results[0].msg.report;
+    const json = JSON.stringify(r);
+    assert.ok(!/Project Submission|CSE 312|Lab Report/.test(json), json);
+    assert.deepStrictEqual(r.tabs.map((t) => t.tab), ["Past due", "Upcoming", "Completed"], "selected tab read first");
+    assert.ok(r.tabs.every((t) => t.selectedConfirmed && t.cardsChangedConfirmed && t.listLoaded));
+  });
+
   // ── Summary ────────────────────────────────────────────────────────────
 
   console.log(`\n${"─".repeat(46)}`);

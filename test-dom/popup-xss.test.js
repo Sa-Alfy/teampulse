@@ -172,6 +172,32 @@ async function runIcs(browser, runTest) {
   });
 }
 
+async function runCaptureDetails(browser, runTest) {
+  await runTest("Capture details shows the last capture report (text only) with a warning", async () => {
+    const now  = new Date().toISOString();
+    const seed = seedState(now, now);
+    seed["tp:v1:capture-report"] = {
+      status: "partial", reason: "", trigger: "load", scope: "all-classes", readyWaitResult: "ready",
+      documentHidden: false, rendered: true, receivedAt: now, cardsSent: 14,
+      background: { accepted: true, reason: "", okTabs: ["Past due"], classesWritten: 2, unmatched: 0, classValidation: "known-classes", health: "ok" },
+      tabs: [{ tab: "Upcoming", status: "timeout", reason: "list-not-loaded", tabFound: true, clicked: true,
+        selectedConfirmed: true, cardsChangedConfirmed: true, listLoaded: false, cardsRaw: 0, droppedHidden: 0,
+        droppedStale: 0, droppedByRelativeFilter: 0, dedupedOut: 0, kept: 0 }],
+    };
+    const { ctx, page, requests } = await openPopup(browser, seed);
+    await page.waitForSelector("#captureDetails:not([hidden])", { timeout: 5000 });
+    assert.match(await page.locator("#captureSummary").textContent(), /Capture details ⚠/);
+    await page.click("#captureSummary");
+    const text = await page.locator("#captureReport").textContent();
+    assert.match(text, /status partial/);
+    assert.match(text, /Upcoming: timeout \(list-not-loaded\)/);
+    assert.match(text, /ok tabs Past due · classes written 2/);
+    assert.strictEqual(await page.locator("#captureReport *").count(), 0, "report rendered as text only");
+    assert.deepStrictEqual(requests, []);
+    await ctx.close();
+  });
+}
+
 async function runHealth(browser, runTest) {
   await runTest("scraper problem newer than last capture → 'Scraper may be out of date' banner", async () => {
     const now  = new Date().toISOString();
@@ -190,6 +216,7 @@ module.exports = { run: async (browser, runTest) => {
   await run(browser, runTest);
   await runHealth(browser, runTest);
   await runIcs(browser, runTest);
+  await runCaptureDetails(browser, runTest);
 } };
 
 if (process.env.NODE_TEST_CONTEXT) {
