@@ -55,3 +55,6 @@ coverage/
 .DS_Store
 Thumbs.db
 dist/
+
+# Owner evidence (personal data) - never commit
+evidence/

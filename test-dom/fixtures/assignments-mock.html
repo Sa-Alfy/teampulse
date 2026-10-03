@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Assignments mock</title>
+<style>
+  body { margin: 0; font: 13px sans-serif; }
+  #scroller { height: 100vh; overflow-y: auto; }
+  body.virtual #scroller { height: 300px; }
+  .fui-Card { height: 60px; border-bottom: 1px solid #ccc; }
+</style>
+</head>
+<body>
+<!--
+  Higher-fidelity offline mock of the all-classes Assignments list
+  (shape from tools/dom-probe-assignments.js, 2026-10-01; behaviour knobs
+  model what live Teams was reported to do). Proves logic only, NOT the live DOM.
+
+  Query knobs:
+    start=<tab>     initially selected tab (default "Past due")
+    stale=<ms>      after a tab click, the previous list stays on screen this long
+    load=<ms>       then a spinner (no cards) this long before the new list renders
+    keepEmpty=1     the previous tab's empty-state text stays during stale+load
+    reuse=1         re-render by index into the same DOM nodes (React index keys)
+    virtual=1       virtualized list: only cards near the viewport exist
+    rel=0           group headers without "Due in …" / "Due … ago"
+    year=1          group headers carry the year ("Dec 30, 2025")
+    route=<ms>      app first loads at "/" (nothing rendered) and routes later
+    emptyUpcoming=1 Upcoming has no assignments
+    emptyText=<s>   empty-state text (default "No assignments")
+    noTabs=1        tabs are not rendered (DOM drift)
+-->
+<div id="app"></div>
+<script>
+(() => {
+  const q = new URLSearchParams(location.search);
+  const num = (k, d) => (q.has(k) ? Number(q.get(k)) : d);
+  const STALE = num("stale", 0), LOAD = num("load", 0), ROUTE = num("route", 0);
+  const REL = q.get("rel") !== "0", YEAR = q.get("year") === "1", VIRTUAL = q.get("virtual") === "1";
+  const REUSE = q.get("reuse") === "1", KEEP_EMPTY = q.get("keepEmpty") === "1";
+  const EMPTY_TEXT = q.get("emptyText") || "No assignments";
+  if (VIRTUAL) document.body.classList.add("virtual");
+
+  const C312 = "Summer_2026_CSE 312 (V1)_ 232_D4", C204 = "CSE 204 (Digital Logic Design DLD Lab)";
+  const C311 = "CSE 311 Data Communication", C313 = "Spring_2026_CSE 313-CSE(181)_232_D2", M103 = "MAT 103 D1; Summer 2026";
+  let n = 0;
+  const id = () => `${(++n).toString(16).padStart(8, "0")}-1111-4222-8333-444455556666`;
+  // [title, class, month, day, time, rel, expected ISO date] — today is 2026-10-03.
+  const DATA = {
+    "Upcoming": [
+      ["Essay draft", C311, "Oct", 20, "11:59 PM", "Due in 2 weeks", "2026-10-20"],
+      ["Final Project", M103, "Jan", 5, "9:00 AM", "Due in 3 months", "2027-01-05"],
+    ],
+    "Past due": [
+      ["Old Lab", C204, "Dec", 30, "11:59 PM", "Due 9 months ago", "2025-12-30"],
+      ["Lab Report (Experiment 5)", C204, "Mar", 15, "11:59 PM", "Due 7 months ago", "2026-03-15"],
+      ["Assignment", C311, "Mar", 31, "11:59 PM", "Due 6 months ago", "2026-03-31"],
+      ["Lab Report (Experiment 4)", C204, "Apr", 7, "11:59 PM", "Due 6 months ago", "2026-04-07"],
+      ["Project Report and Presentation File", C204, "Apr", 23, "11:59 PM", "Due 5 months ago", "2026-04-23"],
+      ["KSA-02", C313, "Apr", 30, "11:59 PM", "Due 5 months ago", "2026-04-30"],
+      ["Lab Report-01", C312, "Jun", 30, "11:59 PM", "Due 3 months ago", "2026-06-30"],
+      ["CLP-01", C312, "Jul", 1, "12:20 PM", "Due 3 months ago", "2026-07-01"],
+      ["Presentation Slide", M103, "Jul", 18, "11:59 PM", "Due 3 months ago", "2026-07-18"],
+      ["Project Proposal", C312, "Jul", 24, "11:59 PM", "Due 2 months ago", "2026-07-24"],
+      ["CLP-02", C312, "Aug", 13, "12:14 PM", "Due 2 months ago", "2026-08-13"],
+      ["CLP-03", C312, "Aug", 28, "11:59 PM", "Due a month ago", "2026-08-28"],
+      ["Lab Report-03", C312, "Aug", 28, "11:59 PM", "Due a month ago", "2026-08-28"],
+      ["Project Submission", C312, "Aug", 31, "11:59 PM", "Due a month ago", "2026-08-31"],
+    ],
+    "Completed": [
+      ["Quiz-1", C311, "Sep", 5, "11:59 PM", "Due a month ago", "2026-09-05"],
+      ["Reading log", M103, "Oct", 20, "11:59 PM", "", "2026-10-20"],
+    ],
+  };
+  if (q.get("emptyUpcoming") === "1") DATA["Upcoming"] = [];
+  const MONTH = { Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5, Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11 };
+  const items = {};
+  window.__expected = [];
+  for (const [tab, rows] of Object.entries(DATA)) {
+    items[tab] = rows.map(([title, cls, mon, day, time, rel, iso]) => {
+      const it = { id: id(), title, cls, mon, day, time, rel: REL ? rel : "", iso, tab };
+      window.__expected.push({ id: it.id, title, className: cls, tab, dueDate: iso });
+      return it;
+    });
+  }
+
+  const ord = (d) => d + ([, "st", "nd", "rd"][d % 100 >> 3 ^ 1 && d % 10] || "th");
+  const el = (tag, attrs, ...kids) => {
+    const e = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs || {})) e.setAttribute(k, v);
+    for (const k of kids) e.append(k);
+    return e;
+  };
+  const app = document.getElementById("app");
+  const TABS = ["Upcoming", "Past due", "Completed"];
+  let selected = q.get("start") || "Past due";
+  let shownTab = selected; // the tab whose list is on screen
+  let gen = 0;
+
+  function cardNode(it) {
+    const header = el("div", { role: "presentation", id: "groupHeader_x" },
+      el("span", {}, `${it.mon} ${ord(it.day)}${YEAR ? `, ${it.iso.slice(0, 4)}` : ""}`));
+    if (it.rel) header.append(el("span", {}, it.rel));
+    const card = el("div", { role: "listitem", "data-test": "assignment-card", id: it.id, class: "fui-Card" },
+      el("span", { "data-test": "assignment-card-title-all-up-view" }, it.title),
+      el("div", { role: "presentation" }, `Due at ${it.time}`),
+      el("div", { role: "presentation" }, it.cls));
+    return el("div", { role: "group" }, el("div", { role: "presentation" }, header),
+      el("div", { role: "presentation" }, card));
+  }
+
+  function fillGroup(g, it) { // reuse: rewrite an existing group in place
+    const card = g.querySelector('[data-test="assignment-card"]');
+    card.id = it.id;
+    card.querySelector('[data-test="assignment-card-title-all-up-view"]').textContent = it.title;
+    const pres = card.querySelectorAll('[role="presentation"]');
+    pres[0].textContent = `Due at ${it.time}`;
+    pres[1].textContent = it.cls;
+    const h = g.querySelector('[id^="groupHeader_"]');
+    h.replaceChildren(el("span", {}, `${it.mon} ${ord(it.day)}`));
+    if (it.rel) h.append(el("span", {}, it.rel));
+  }
+
+  let scroller, list, topPad;
+  function renderShell() {
+    app.replaceChildren();
+    if (q.get("noTabs") !== "1") {
+      app.append(el("div", { role: "tablist" }, ...TABS.map((t) => {
+        const b = el("button", { role: "tab", "data-test": t, "aria-selected": String(t === selected) }, t);
+        b.addEventListener("click", () => select(t));
+        return b;
+      })));
+    }
+    scroller = el("div", { id: "scroller" });
+    list = el("div", { role: "list", "data-test": "assignment-list" });
+    scroller.append(list);
+    app.append(scroller);
+    scroller.addEventListener("scroll", () => VIRTUAL && renderList(shownTab, true));
+  }
+
+  function renderList(tab, keepScroll) {
+    const rows = items[tab];
+    if (!rows.length) {
+      list.replaceChildren(el("div", { class: "empty" }, EMPTY_TEXT));
+      return;
+    }
+    let from = 0, to = rows.length;
+    if (VIRTUAL) { // 61 px per card, 300 px viewport, 2-card overscan
+      from = Math.max(0, Math.floor(scroller.scrollTop / 61) - 2);
+      to = Math.min(rows.length, from + 9);
+    }
+    const groups = rows.slice(from, to);
+    if (REUSE && list.querySelectorAll('[role="group"]').length === groups.length && !VIRTUAL) {
+      list.querySelectorAll('[role="group"]').forEach((g, i) => fillGroup(g, groups[i]));
+      return;
+    }
+    const pad = el("div", { style: `height:${from * 61}px` });
+    const tail = el("div", { style: `height:${(rows.length - to) * 61}px` });
+    list.replaceChildren(pad, ...groups.map(cardNode), tail);
+  }
+
+  function select(tab) {
+    const my = ++gen;
+    selected = tab;
+    document.querySelectorAll("[role='tab']").forEach((b) => b.setAttribute("aria-selected", String(b.getAttribute("data-test") === tab)));
+    const stillEmpty = KEEP_EMPTY && list.querySelector(".empty");
+    setTimeout(() => {
+      if (my !== gen) return;
+      if (LOAD > 0) list.replaceChildren(...(stillEmpty ? [stillEmpty] : []), el("div", { class: "spinner" }, "Loading"));
+      setTimeout(() => {
+        if (my !== gen) return;
+        shownTab = tab;
+        scroller.scrollTop = 0;
+        renderList(tab);
+      }, LOAD);
+    }, STALE);
+  }
+
+  function boot() { renderShell(); renderList(shownTab); }
+  if (ROUTE > 0) {
+    setTimeout(() => { history.pushState(null, "", "/classes/all/list" + location.search); boot(); }, ROUTE);
+  } else boot();
+})();
+</script>
+</body>
+</html>
