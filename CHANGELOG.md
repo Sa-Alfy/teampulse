@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.3 (2026-10-03, release): logo
+
+- **New logo:** a white pulse line with an amber "new" dot on the popup's indigo→violet tile. It replaces the placeholder diamond icons and the ⚡ in the popup header, which is now inline SVG, not an `<img>`. The source is `assets/logo.svg`, plus `assets/logo-small.svg` with a heavier line for 16/32 px. `npm run build:icons` renders `extension/icons/icon{16,32,48,128}.png` with the Playwright Chromium the project already uses, so there is no new dependency.
+- The manifest now has a top-level `icons` entry (16/32/48/128) and a 32 px toolbar icon. Before, `chrome://extensions` showed a generic icon. No permissions changed.
+- Tests: `node --test` 103 pass; `npm run test:dom` 47/47; `npm run test:e2e` 5/5. The icon was checked on `chrome://extensions` with the unpacked extension.
+
 ## 0.7.2 (2026-10-03, release): assignments sync stuck on Upcoming, card jump stuck behind it
 
 **Confirmed on live Teams by the owner (2026-10-03, one student account):** Sync no longer stalls on the empty Upcoming tab, and clicking an assignment card opens it in Teams. Promoted from pre-release to full release. The owner then also confirmed that opening an older announcement scrolls up and finds the post (0.7.1 feature).

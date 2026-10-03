@@ -78,7 +78,7 @@ button { font-family: inherit; }
   gap: 7px;
 }
 
-.brand-bolt { font-size: 16px; line-height: 1; }
+.brand-logo { display: block; flex-shrink: 0; }
 
 .brand-title {
   font-size: 15px;

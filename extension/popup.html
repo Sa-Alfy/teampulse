@@ -11,7 +11,12 @@
     <!-- Top Header -->
     <header class="header">
       <div class="brand">
-        <span class="brand-bolt" aria-hidden="true">⚡</span>
+        <svg class="brand-logo" viewBox="0 0 128 128" width="20" height="20" aria-hidden="true" focusable="false">
+          <defs><linearGradient id="tp-logo-bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#6366f1"/><stop offset="1" stop-color="#8b5cf6"/></linearGradient></defs>
+          <rect width="128" height="128" rx="30" fill="url(#tp-logo-bg)"/>
+          <path d="M14 74 H40 L56 34 L74 100 L88 74 H114" fill="none" stroke="#fff" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="104" cy="26" r="16" fill="#fbbf24"/>
+        </svg>
         <span class="brand-title">TeamsPulse</span>
         <span class="live-pill" id="liveBadge" title="">
           <span class="pulse-dot"></span>

@@ -75,6 +75,6 @@ Runtime files only (15 files at v0.6.0). Upload that zip; do not upload the repo
 - [x] Live-Teams check of "Sync all classes" (owner, 2026-10-01)
 - [ ] Live-Teams check of assignments capture
 - [ ] Store screenshots (1280×800) — use mock data or blur classmates' names
-- [ ] 128×128 icon is final (current icons are placeholders)
+- [x] 128×128 icon is final (pulse logo, `assets/logo.svg`; PNGs via `npm run build:icons`)
 - [ ] Privacy policy URL live
 - [ ] Data-usage answers chosen

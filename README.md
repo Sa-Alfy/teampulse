@@ -3,7 +3,7 @@
 > **Turn chaotic Microsoft Teams courses into a clean, automated academic briefing.**  
 > Scrapes classes, tracks assignments, extracts Class Test (CT) dates, and delivers a unified daily digest — showing only what's **new since the last run**.
 > 
-> **Status (2026-10-03, [v0.7.2 release](https://github.com/Sa-Alfy/teampulse/releases/tag/v0.7.2)):** the browser extension works on its own — no server, no Node.js. Live capture of channel posts and "Sync all classes" have been confirmed working on `teams.cloud.microsoft` by the owner (one student account). Assignment capture was reworked in v0.6.4–0.6.7 (see [CHANGELOG](CHANGELOG.md)): on real Teams (one student account) a v0.6.5 capture was accepted with Past due items listed, and with v0.7.2 the owner confirmed Sync captures assignments without stalling, and that clicking a card opens it in Teams: assignments at their card, and announcements at their post, including older posts found by scrolling up. Not on the Chrome Web Store.
+> **Status (2026-10-03, [v0.7.3 release](https://github.com/Sa-Alfy/teampulse/releases/tag/v0.7.3)):** the browser extension works on its own — no server, no Node.js. Live capture of channel posts and "Sync all classes" have been confirmed working on `teams.cloud.microsoft` by the owner (one student account). Assignment capture was reworked in v0.6.4–0.6.7 (see [CHANGELOG](CHANGELOG.md)): on real Teams (one student account) a v0.6.5 capture was accepted with Past due items listed, and with v0.7.2 the owner confirmed Sync captures assignments without stalling, and that clicking a card opens it in Teams: assignments at their card, and announcements at their post, including older posts found by scrolling up. Not on the Chrome Web Store.
 
 ---
 
