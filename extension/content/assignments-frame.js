@@ -291,15 +291,19 @@ function ownText(el) {
     .map((n) => n.textContent).join(" ").replace(/[\s ]+/g, " ").trim();
 }
 
-/** "Due at …" text and the class-name line of an all-up card. */
+/**
+ * The status/time line ("Due at 11:59 PM"; Completed cards: "Submitted at
+ * 1:52 AM", seen live 2026-10-03) and the class-name line right after it.
+ */
+const TIME_LINE_RE = /^(due|submitted|turned in|returned|graded|completed)\b/i;
 function allUpParts(card, title) {
   let dueText = "";
   let className = "";
   for (const el of card.querySelectorAll('[role="presentation"]')) {
     const t = ownText(el);
     if (!t || t === title || /^\d+(\.\d+)?\s+points?$/i.test(t)) continue;
-    if (/^due\b/i.test(t)) { if (!dueText) dueText = t; continue; }
-    if (dueText && !className) className = t; // the line right after "Due at …"
+    if (TIME_LINE_RE.test(t)) { if (!dueText) dueText = t; continue; }
+    if (dueText && !className) className = t; // the line right after the time line
   }
   return { dueText, className };
 }
@@ -368,7 +372,7 @@ function newTabReport(tab) {
   return {
     tab, tabFound: false, clicked: false, selectedConfirmed: false,
     cardsChangedConfirmed: false, listLoaded: false, cardsRaw: 0,
-    droppedHidden: 0, droppedStale: 0, droppedByRelativeFilter: 0,
+    previousListForeign: false, droppedHidden: 0, droppedStale: 0, droppedByRelativeFilter: 0,
     dedupedOut: 0, kept: 0, status: "skipped", reason: "",
   };
 }
@@ -497,26 +501,30 @@ async function scrape(trigger = "load") {
     const order = originalTab ? [originalTab, ...TABS.filter((t) => t !== originalTab)] : TABS.slice();
     const assignments = [];
     const capturedTab = new Map(); // id → tab it was captured under
+    let prevForeign = false;       // the list on screen was judged not the previous tab's
 
-    for (const tabName of order) {
-      const tr = newTabReport(tabName);
-      report.tabs.push(tr);
+    const captureTab = async (tabName, tr) => {
       const tabEl = findTabEl(tabName);
-      if (!tabEl) { tr.reason = "tab-not-found"; continue; }
+      if (!tabEl) { tr.reason = "tab-not-found"; return; }
       tr.tabFound = true;
 
       const wasSelected = selectedTabName() === tabName;
       const before = listState();
+      // The list on screen did not belong to the previous tab, so it may be
+      // this tab's: Teams need not re-render it when this tab is clicked.
+      const trustScreen = prevForeign;
+      prevForeign = false;
+      tr.previousListForeign = trustScreen;
       if (!wasSelected) { tabEl.click(); tr.clicked = true; }
 
       tr.selectedConfirmed = !!(await waitFor(
         () => document.querySelector(`[data-test="${tabName}"][aria-selected="true"]`), TAB_SELECT_MS));
-      if (!tr.selectedConfirmed) { tr.status = "timeout"; tr.reason = "tab-not-selected"; continue; }
+      if (!tr.selectedConfirmed) { tr.status = "timeout"; tr.reason = "tab-not-selected"; return; }
 
       // After a real switch Teams keeps the previous list on screen for a
       // while (live: past-due cards recorded as Upcoming). Wait until it is
       // replaced; a list that never changes is stale, not this tab's.
-      if (wasSelected || (before.ids.size === 0 && !before.empty)) {
+      if (wasSelected || trustScreen || (before.ids.size === 0 && !before.empty)) {
         tr.cardsChangedConfirmed = true;
       } else {
         tr.cardsChangedConfirmed = !!(await waitFor(() => listChanged(before), CHANGE_WAIT_MS));
@@ -524,17 +532,17 @@ async function scrape(trigger = "load") {
       if (!tr.cardsChangedConfirmed) {
         // Two empty tabs in a row also look unchanged: not proof, so not "ok".
         tr.reason = before.ids.size ? "previous-tab-cards-still-shown" : "empty-state-unchanged";
-        continue;
+        return;
       }
 
       // The list is fetched after a switch: wait for cards or a fresh empty state.
-      tr.listLoaded = !!(await waitFor(() => listLoadedSince(wasSelected ? null : before), LIST_LOAD_TIMEOUT_MS));
-      if (!tr.listLoaded) { tr.status = "timeout"; tr.reason = "list-not-loaded"; continue; }
+      tr.listLoaded = !!(await waitFor(() => listLoadedSince(wasSelected || trustScreen ? null : before), LIST_LOAD_TIMEOUT_MS));
+      if (!tr.listLoaded) { tr.status = "timeout"; tr.reason = "list-not-loaded"; return; }
       await new Promise((r) => setTimeout(r, SETTLE_MS));
 
       // An assignment is in exactly one tab: a card that was on screen before
       // the switch belongs to the previous tab.
-      const staleIds = wasSelected ? new Set() : before.ids;
+      const staleIds = wasSelected || trustScreen ? new Set() : before.ids;
       for (const c of await collectAllCards(tabName, tr)) {
         const id = c.assignmentId || c.rawId;
         if (c.rawId && staleIds.has(c.rawId)) { tr.droppedStale++; continue; }
@@ -543,7 +551,30 @@ async function scrape(trigger = "load") {
         assignments.push(c);
         tr.kept++;
       }
+      // Every card read here carried another tab's relative text ("Due … ago"
+      // under Upcoming): the list on screen is not this tab's. Live
+      // (2026-10-03): the app opened on Upcoming showing the Past due list,
+      // then switched to Past due by itself.
+      const foreign = tr.droppedByRelativeFilter + tr.droppedStale + tr.dedupedOut;
+      if (tr.kept === 0 && tr.droppedByRelativeFilter > 0 && foreign >= tr.cardsRaw - tr.droppedHidden) {
+        tr.reason = "list-belongs-to-other-tab";
+        prevForeign = true;
+        return;
+      }
       tr.status = "ok";
+    };
+
+    for (const tabName of order) {
+      const tr = newTabReport(tabName);
+      report.tabs.push(tr);
+      await captureTab(tabName, tr);
+    }
+    // Retry a tab that showed another tab's list, once, by clicking it from
+    // the tab now selected.
+    for (const tr of report.tabs.filter((t) => t.reason === "list-belongs-to-other-tab")) {
+      if (selectedTabName() === tr.tab) continue;
+      Object.assign(tr, newTabReport(tr.tab), { retried: true });
+      await captureTab(tr.tab, tr);
     }
 
     // Restore the originally selected tab.

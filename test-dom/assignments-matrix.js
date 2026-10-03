@@ -44,6 +44,8 @@ const SCENARIOS = [
   { name: "late route 3s",            qs: "route=3000" },
   { name: "other empty wording",      qs: "start=Upcoming&emptyUpcoming=1&emptyText=You%27re%20all%20caught%20up&stale=800&load=2000" },
   { name: "tabs missing (DOM drift)", qs: "noTabs=1" },
+  { name: "live: opens on Upcoming showing Past due, self-switches 3s", qs: "autoSwitch=3000&emptyUpcoming=1&stale=600" },
+  { name: "live: self-switch 300ms", qs: "autoSwitch=300&emptyUpcoming=1&stale=600" },
   { name: "iframe display:none, shown at 4s", qs: "stale=600", frame: "display", showMs: 4000 },
   { name: "iframe 0x0, shown at 4s",  qs: "stale=600", frame: "zero", showMs: 4000 },
   { name: "background tab, visible at 4s", qs: "stale=600", docHidden: true, showMs: 4000 },

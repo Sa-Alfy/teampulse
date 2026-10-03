@@ -132,7 +132,7 @@ function sanitizeReport(r) {
     out.tabs.push({
       tab: t.tab,
       tabFound: bool(t.tabFound), clicked: bool(t.clicked), selectedConfirmed: bool(t.selectedConfirmed),
-      cardsChangedConfirmed: bool(t.cardsChangedConfirmed), listLoaded: bool(t.listLoaded),
+      cardsChangedConfirmed: bool(t.cardsChangedConfirmed), listLoaded: bool(t.listLoaded), retried: bool(t.retried), previousListForeign: bool(t.previousListForeign),
       cardsRaw: num(t.cardsRaw), droppedHidden: num(t.droppedHidden), droppedStale: num(t.droppedStale),
       droppedByRelativeFilter: num(t.droppedByRelativeFilter), dedupedOut: num(t.dedupedOut), kept: num(t.kept),
       status: ["ok", "skipped", "timeout"].includes(t.status) ? t.status : "skipped",
@@ -256,9 +256,13 @@ async function handleMessage(msg, sender, deps) {
         return verdict(reject(`assignments[${i}].className is invalid`));
       }
     }
+    // All-classes cards name their class; one that doesn't (live 2026-10-03:
+    // Completed cards read "Submitted at …", which hid the class line) goes to
+    // the Unmatched bucket instead of rejecting the whole batch.
     const allClasses = msg.scope === "all-classes";
-    if (allClasses && assignments.some((a) => a.className === undefined)) {
-      return verdict(reject("all-classes assignments must carry className"));
+    let classless = 0;
+    if (allClasses) {
+      for (const a of assignments) if (a.className === undefined) { a.className = UNMATCHED_CLASS; classless++; }
     }
 
     // Tabs whose capture is authoritative. Older senders (no okTabs) captured
@@ -284,8 +288,11 @@ async function handleMessage(msg, sender, deps) {
     for (const a of assignments) {
       let target;
       if (a.className !== undefined) {
-        target = byNorm.size === 0 ? a.className : byNorm.get(normClass(a.className));
-        if (!target) {
+        target = a.className === UNMATCHED_CLASS ? null
+          : byNorm.size === 0 ? a.className : byNorm.get(normClass(a.className));
+        if (!target && a.className === UNMATCHED_CLASS) {
+          target = UNMATCHED_CLASS;
+        } else if (!target) {
           unmatched++;
           target = UNMATCHED_CLASS;
           a.details = [a.details, a.className].filter(Boolean).join(" · ");
@@ -325,8 +332,9 @@ async function handleMessage(msg, sender, deps) {
       okTabs,
       classesWritten,
       unmatched,
+      classless,
       classValidation: byNorm.size ? "known-classes" : "no-known-classes",
-      health: unmatched ? "unmatched-classes" : "ok",
+      health: unmatched || classless ? "unmatched-classes" : "ok",
     });
   }
 

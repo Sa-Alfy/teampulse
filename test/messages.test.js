@@ -334,14 +334,18 @@ test("messages: all-classes TP_ASSIGNMENTS files each card under its own class a
   assert.deepStrictEqual(st.classes[STALE].assignments, [], "stale, wrongly filed list cleared");
 });
 
-test("messages: all-classes batch without className rejected; empty batch wipes nothing", async () => {
+// Live 2026-10-03: one classless card (Completed "Submitted at …") rejected
+// the whole batch. Since v0.6.5 it goes to the Unmatched bucket instead.
+test("messages: all-classes card without className → Unmatched (batch accepted); empty batch wipes nothing", async () => {
   const store = makeStore();
   const deps  = makeDeps({ store, session: makeSession() });
   await store.ingestAssignments("X", [{ tab: "Upcoming", title: "keep" }], "2026-10-01T00:00:00Z");
 
-  const bad = await handleMessage({ type: "TP_ASSIGNMENTS", scope: "all-classes",
+  const bad = await handleMessage({ type: "TP_ASSIGNMENTS", scope: "all-classes", okTabs: ["Upcoming"],
     assignments: [{ tab: "Upcoming", title: "no class" }] }, assignSender(4), deps);
-  assert.strictEqual(bad.ok, false);
+  assert.strictEqual(bad.ok, true, bad.reason);
+  assert.deepStrictEqual((await store.getState()).classes.Unmatched.assignments.map((a) => a.title), ["no class"]);
+  assert.strictEqual((await store.getState()).classes.X.assignments.length, 1, "partial batch: X not cleared");
 
   const empty = await handleMessage({ type: "TP_ASSIGNMENTS", scope: "all-classes", assignments: [] }, assignSender(4), deps);
   assert.strictEqual(empty.ok, true);

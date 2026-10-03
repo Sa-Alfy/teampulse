@@ -598,6 +598,8 @@ async function main() {
       assert.strictEqual(r.cards, 0);
       assert.strictEqual(r.okTabs, "");
     }],
+    ["live: opens on Upcoming showing Past due's list, switches itself (3 s) → all captured", "live: opens on Upcoming showing Past due, self-switches 3s", clean],
+    ["live: same, switch after 300 ms → all captured", "live: self-switch 300ms", clean],
     ["tabs missing (DOM drift) → 'failed' report with reason, no okTabs", "tabs missing (DOM drift)", (r) => {
       assert.strictEqual(r.status, "failed");
       assert.strictEqual(r.reasons, "no-tabs-found");

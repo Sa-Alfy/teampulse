@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.5 (unreleased): fixes from the owner's first live 0.6.4 capture report
+
+Live report (2026-10-03): status ok, 33 cards sent, **rejected by the background**: "all-classes assignments must carry className". Upcoming read 23 cards, all dropped by the relative-text filter, but was still marked ok.
+
+### Fixed
+- **Completed cards lost their class.** Live Completed cards read "Submitted at 1:52 AM", not "Due at …". The class line is now taken after any status/time line (due / submitted / turned in / returned / graded / completed).
+- **One classless card rejected the whole batch.** Such cards now go to the Unmatched bucket, and the report counts them (`classless`).
+- **Upcoming marked ok with another tab's list.** The app opens on Upcoming while showing the Past due list, then selects Past due by itself. A tab whose every card belongs to another tab is now "skipped" (`list-belongs-to-other-tab`) and retried once by clicking it. The next tab trusts the list already on screen, because Teams may not re-render it.
+- Reproduced offline in the mock (`autoSwitch` knob; Completed cards with "Submitted at" lines). The 18-scenario matrix is clean. **Still unverified on real Teams.**
+
 ## 0.6.4 (unreleased): assignments capture fixes
 
 Proven **offline only**: against a new Teams-assignments mock (`test-dom/fixtures/assignments-mock.html`,

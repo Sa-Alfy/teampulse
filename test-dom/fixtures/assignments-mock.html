@@ -28,6 +28,8 @@
     route=<ms>      app first loads at "/" (nothing rendered) and routes later
     emptyUpcoming=1 Upcoming has no assignments
     emptyText=<s>   empty-state text (default "No assignments")
+    autoSwitch=<ms> live 2026-10-03: opens on Upcoming showing the Past due list,
+                    then selects Past due by itself after <ms>
     noTabs=1        tabs are not rendered (DOM drift)
 -->
 <div id="app"></div>
@@ -68,7 +70,8 @@
       ["Project Submission", C312, "Aug", 31, "11:59 PM", "Due a month ago", "2026-08-31"],
     ],
     "Completed": [
-      ["Quiz-1", C311, "Sep", 5, "11:59 PM", "Due a month ago", "2026-09-05"],
+      // Live (2026-10-03): Completed headers carry the weekday, cards "Submitted at …".
+      ["Quiz-1", C311, "Sep", 4, "1:52 AM", "Friday", "2026-09-04"],
       ["Reading log", M103, "Oct", 20, "11:59 PM", "", "2026-10-20"],
     ],
   };
@@ -95,6 +98,8 @@
   const TABS = ["Upcoming", "Past due", "Completed"];
   let selected = q.get("start") || "Past due";
   let shownTab = selected; // the tab whose list is on screen
+  const AUTO = num("autoSwitch", 0);
+  if (AUTO) { selected = "Upcoming"; shownTab = "Past due"; }
   let gen = 0;
 
   function cardNode(it) {
@@ -103,7 +108,7 @@
     if (it.rel) header.append(el("span", {}, it.rel));
     const card = el("div", { role: "listitem", "data-test": "assignment-card", id: it.id, class: "fui-Card" },
       el("span", { "data-test": "assignment-card-title-all-up-view" }, it.title),
-      el("div", { role: "presentation" }, `Due at ${it.time}`),
+      el("div", { role: "presentation" }, `${it.tab === "Completed" ? "Submitted" : "Due"} at ${it.time}`),
       el("div", { role: "presentation" }, it.cls));
     return el("div", { role: "group" }, el("div", { role: "presentation" }, header),
       el("div", { role: "presentation" }, card));
@@ -114,7 +119,7 @@
     card.id = it.id;
     card.querySelector('[data-test="assignment-card-title-all-up-view"]').textContent = it.title;
     const pres = card.querySelectorAll('[role="presentation"]');
-    pres[0].textContent = `Due at ${it.time}`;
+    pres[0].textContent = `${it.tab === "Completed" ? "Submitted" : "Due"} at ${it.time}`;
     pres[1].textContent = it.cls;
     const h = g.querySelector('[id^="groupHeader_"]');
     h.replaceChildren(el("span", {}, `${it.mon} ${ord(it.day)}`));
@@ -160,6 +165,11 @@
   }
 
   function select(tab) {
+    if (AUTO && tab === shownTab && tab !== selected) { // list already on screen: only the tab flips
+      ++gen; selected = tab;
+      document.querySelectorAll("[role='tab']").forEach((b) => b.setAttribute("aria-selected", String(b.getAttribute("data-test") === tab)));
+      return;
+    }
     const my = ++gen;
     selected = tab;
     document.querySelectorAll("[role='tab']").forEach((b) => b.setAttribute("aria-selected", String(b.getAttribute("data-test") === tab)));
@@ -176,7 +186,14 @@
     }, STALE);
   }
 
-  function boot() { renderShell(); renderList(shownTab); }
+  function boot() {
+    renderShell(); renderList(shownTab);
+    if (AUTO) setTimeout(() => {
+      if (selected !== "Upcoming" || gen > 0) return; // once, on load, before any click
+      selected = "Past due";
+      document.querySelectorAll("[role='tab']").forEach((b) => b.setAttribute("aria-selected", String(b.getAttribute("data-test") === "Past due")));
+    }, AUTO);
+  }
   if (ROUTE > 0) {
     setTimeout(() => { history.pushState(null, "", "/classes/all/list" + location.search); boot(); }, ROUTE);
   } else boot();

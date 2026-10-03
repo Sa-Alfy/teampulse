@@ -745,7 +745,7 @@ function formatCaptureReport(r) {
     `received ${r.receivedAt || "?"} · trigger ${r.trigger || "?"} · scope ${r.scope || "?"}`,
     `status ${r.status}${r.reason ? ` (${r.reason})` : ""} · ready ${r.readyWaitResult || "-"} · hidden ${yn(r.documentHidden)} · rendered ${yn(r.rendered)} · cards sent ${r.cardsSent || 0}`,
     `background: ${bg.accepted ? "accepted" : "rejected"}${bg.reason ? ` (${bg.reason})` : ""}` +
-      (bg.okTabs ? ` · ok tabs ${bg.okTabs.join(", ") || "none"} · classes written ${bg.classesWritten} · unmatched ${bg.unmatched} · ${bg.classValidation}` : ""),
+      (bg.okTabs ? ` · ok tabs ${bg.okTabs.join(", ") || "none"} · classes written ${bg.classesWritten} · unmatched ${bg.unmatched}${bg.classless ? ` (+${bg.classless} without class)` : ""} · ${bg.classValidation}` : ""),
   ];
   for (const t of r.tabs || []) {
     lines.push(`${t.tab}: ${t.status}${t.reason ? ` (${t.reason})` : ""} · found ${yn(t.tabFound)} clicked ${yn(t.clicked)} selected ${yn(t.selectedConfirmed)} changed ${yn(t.cardsChangedConfirmed)} loaded ${yn(t.listLoaded)} · raw ${t.cardsRaw} hidden ${t.droppedHidden} stale ${t.droppedStale} relative ${t.droppedByRelativeFilter} deduped ${t.dedupedOut} kept ${t.kept}`);
