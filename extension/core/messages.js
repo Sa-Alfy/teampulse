@@ -98,6 +98,67 @@ function tabCtxKey(tabId) {
   return `tp:tabctx:${tabId}`;
 }
 
+// ── Assignment capture helpers ─────────────────────────────────────────────
+
+const ASSIGNMENT_TABS = ["Upcoming", "Past due", "Completed"];
+const UNMATCHED_CLASS = "Unmatched";
+const REPORT_STATUSES = new Set(["ok", "partial", "failed", "deferred"]);
+const REASON_RE       = /^[A-Za-z0-9 :+._()-]{0,120}$/;
+
+/**
+ * Copy of a content-script capture report with only the known fields:
+ * numbers, booleans and short fixed-vocabulary codes. Anything else (titles,
+ * class names, unexpected keys) is dropped.
+ */
+function sanitizeReport(r) {
+  if (!r || typeof r !== "object") return null;
+  const num  = (v) => (Number.isFinite(v) && v >= 0 ? Math.min(Math.floor(v), 1e6) : 0);
+  const bool = (v) => v === true;
+  const code = (v) => (typeof v === "string" && REASON_RE.test(v) ? v : "");
+  const out = {
+    version: num(r.version),
+    startedAt: typeof r.startedAt === "string" && !Number.isNaN(Date.parse(r.startedAt)) ? r.startedAt.slice(0, 40) : "",
+    trigger: code(r.trigger),
+    scope: r.scope === "all-classes" || r.scope === "class" ? r.scope : "",
+    readyWaitResult: r.readyWaitResult === "ready" || r.readyWaitResult === "timeout" ? r.readyWaitResult : "",
+    documentHidden: bool(r.documentHidden),
+    rendered: bool(r.rendered),
+    status: REPORT_STATUSES.has(r.status) ? r.status : "failed",
+    reason: code(r.reason),
+    tabs: [],
+  };
+  for (const t of Array.isArray(r.tabs) ? r.tabs.slice(0, ASSIGNMENT_TABS.length) : []) {
+    if (!t || !ASSIGNMENT_TABS.includes(t.tab)) continue;
+    out.tabs.push({
+      tab: t.tab,
+      tabFound: bool(t.tabFound), clicked: bool(t.clicked), selectedConfirmed: bool(t.selectedConfirmed),
+      cardsChangedConfirmed: bool(t.cardsChangedConfirmed), listLoaded: bool(t.listLoaded),
+      cardsRaw: num(t.cardsRaw), droppedHidden: num(t.droppedHidden), droppedStale: num(t.droppedStale),
+      droppedByRelativeFilter: num(t.droppedByRelativeFilter), dedupedOut: num(t.dedupedOut), kept: num(t.kept),
+      status: ["ok", "skipped", "timeout"].includes(t.status) ? t.status : "skipped",
+      reason: code(t.reason),
+    });
+  }
+  return out;
+}
+
+const normClass = (s) => String(s).replace(/[\s\u00a0]+/g, " ").trim().toLowerCase();
+
+/** Store the report with the background's verdict (never replaces a recent good report with "deferred"). */
+async function saveCaptureReport(store, msg, background, nowIso) {
+  if (!store.setCaptureReport) return;
+  const report = sanitizeReport(msg && msg.report) || { status: "failed", reason: "no-report", tabs: [] };
+  report.receivedAt = nowIso;
+  report.cardsSent = Array.isArray(msg && msg.assignments) ? msg.assignments.length : 0;
+  report.background = background;
+  if (report.status === "deferred" && store.getCaptureReport) {
+    const prev = await store.getCaptureReport();
+    if (prev && (prev.status === "ok" || prev.status === "partial") &&
+        Date.parse(nowIso) - Date.parse(prev.receivedAt || "") < 6 * 3600e3) return;
+  }
+  await store.setCaptureReport(report);
+}
+
 // ── handleMessage ──────────────────────────────────────────────────────────
 
 async function handleMessage(msg, sender, deps) {
@@ -130,6 +191,7 @@ async function handleMessage(msg, sender, deps) {
     }
 
     await session.set(tabCtxKey(tabId), className);
+    if (store.noteClass) await store.noteClass(className);
     return ok();
   }
 
@@ -171,53 +233,101 @@ async function handleMessage(msg, sender, deps) {
     if (senderOrigin !== ASSIGNMENTS_ORIGIN) {
       return reject(`TP_ASSIGNMENTS from disallowed origin: ${senderOrigin}`);
     }
+    const now = nowIso();
+    // Every outcome is recorded with the capture report (no silent drops).
+    const verdict = async (res, extra = {}) => {
+      await saveCaptureReport(store, msg, { accepted: res.ok, reason: res.reason || "", ...extra }, now);
+      return res;
+    };
 
     const { assignments } = msg;
     if (!Array.isArray(assignments)) {
-      return reject("assignments must be an array");
+      return verdict(reject("assignments must be an array"));
     }
     if (assignments.length > MAX_ASSIGNMENTS) {
-      return reject(`assignments array exceeds ${MAX_ASSIGNMENTS} items`);
+      return verdict(reject(`assignments array exceeds ${MAX_ASSIGNMENTS} items`));
     }
     for (let i = 0; i < assignments.length; i++) {
       if (!isValidAssignment(assignments[i])) {
-        return reject(`assignments[${i}] is invalid`);
+        return verdict(reject(`assignments[${i}] is invalid`));
+      }
+      const cn = assignments[i].className;
+      if (cn !== undefined && (typeof cn !== "string" || cn.length === 0 || cn.length > MAX_CLASS_NAME)) {
+        return verdict(reject(`assignments[${i}].className is invalid`));
       }
     }
+    const allClasses = msg.scope === "all-classes";
+    if (allClasses && assignments.some((a) => a.className === undefined)) {
+      return verdict(reject("all-classes assignments must carry className"));
+    }
 
-    // All-classes view (left-bar Assignments app): every card names its own
-    // class, so file each one there instead of under the tab's last class.
-    // The list covers all classes and all three tabs, so it is authoritative:
-    // known classes absent from a non-empty batch have no assignments.
-    if (msg.scope === "all-classes") {
-      const byClass = {};
-      for (const a of assignments) {
-        if (typeof a.className !== "string" || a.className.length === 0) {
-          return reject("all-classes assignments must carry className");
+    // Tabs whose capture is authoritative. Older senders (no okTabs) captured
+    // all three tabs in one go.
+    const okTabs = Array.isArray(msg.okTabs)
+      ? ASSIGNMENT_TABS.filter((t) => msg.okTabs.includes(t))
+      : ASSIGNMENT_TABS.slice();
+    if (!Array.isArray(msg.okTabs) && assignments.length === 0) {
+      return verdict({ ok: true, stored: false, reason: "empty batch without tab confirmation; stored assignments kept" });
+    }
+    if (okTabs.length === 0) {
+      // Failed or deferred capture: never overwrite stored items with nothing.
+      return verdict({ ok: true, stored: false, reason: "no tab confirmed; stored assignments kept" });
+    }
+
+    // Each card that names its class is filed there (validated against
+    // classes seen in Teams); the rest go under the tab's class context.
+    const known = store.getKnownClasses ? await store.getKnownClasses() : [];
+    const byNorm = new Map(known.map((k) => [normClass(k), k]));
+    let unmatched = 0;
+    let context = null;
+    const byClass = new Map();
+    for (const a of assignments) {
+      let target;
+      if (a.className !== undefined) {
+        target = byNorm.size === 0 ? a.className : byNorm.get(normClass(a.className));
+        if (!target) {
+          unmatched++;
+          target = UNMATCHED_CLASS;
+          a.details = [a.details, a.className].filter(Boolean).join(" · ");
         }
-        if (a.className.length > MAX_CLASS_NAME) {
-          return reject(`className exceeds ${MAX_CLASS_NAME} chars`);
+      } else {
+        if (context === null) context = (await session.get(tabCtxKey(tabId))) || "";
+        if (!context) {
+          return verdict(reject("no class context for tab — TP_CLASS_CONTEXT not yet received"));
         }
-        (byClass[a.className] = byClass[a.className] || []).push(a);
+        target = context;
       }
-      if (assignments.length === 0) return ok(); // nothing rendered — don't wipe
-      const now = nowIso();
-      const known = Object.keys((await store.getState()).classes || {});
-      for (const cn of new Set([...known, ...Object.keys(byClass)])) {
-        await store.ingestAssignments(cn, byClass[cn] || [], now);
-      }
-      return ok();
+      if (!byClass.has(target)) byClass.set(target, []);
+      byClass.get(target).push(a);
+    }
+    if (!allClasses && byClass.size === 0) {
+      context = (await session.get(tabCtxKey(tabId))) || "";
+      if (!context) return verdict(reject("no class context for tab — TP_CLASS_CONTEXT not yet received"));
+      byClass.set(context, []);
     }
 
-    // Join to className from tab context
-    const className = await session.get(tabCtxKey(tabId));
-    if (!className) {
-      return reject("no class context for tab — TP_CLASS_CONTEXT not yet received");
+    // The all-classes list covers every class: a stored class absent from it
+    // has no assignments — but only trust that when every tab was confirmed.
+    if (allClasses && okTabs.length === ASSIGNMENT_TABS.length) {
+      for (const cn of Object.keys((await store.getState()).classes || {})) {
+        if (!byClass.has(cn)) byClass.set(cn, []);
+      }
     }
 
-    const now = nowIso();
-    await store.ingestAssignments(className, assignments, now);
-    return ok();
+    let classesWritten = 0;
+    for (const [cn, items] of byClass) {
+      const r = store.mergeAssignments
+        ? await store.mergeAssignments(cn, items, okTabs, now)
+        : (await store.ingestAssignments(cn, items, now), { written: true });
+      if (r && r.written) classesWritten++;
+    }
+    return verdict(ok(), {
+      okTabs,
+      classesWritten,
+      unmatched,
+      classValidation: byNorm.size ? "known-classes" : "no-known-classes",
+      health: unmatched ? "unmatched-classes" : "ok",
+    });
   }
 
   // ── TP_HEALTH ─────────────────────────────────────────────────────────────

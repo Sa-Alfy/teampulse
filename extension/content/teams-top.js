@@ -375,6 +375,7 @@
   const ASSIGNMENTS_LABEL    = /^assignments\b/i;
   const ASSIGNMENTS_WAIT_MS  = 120_000; // 3 tabs × up to 20 s load + scrolling
   const ASSIGNMENT_KEY_PFX   = "tp:v1:assignments:";
+  const CAPTURE_REPORT_KEY   = "tp:v1:capture-report";
 
   let _syncing = false;
   let _assignmentWaiters = [];
@@ -385,16 +386,16 @@
       .find((b) => ASSIGNMENTS_LABEL.test(b.getAttribute("aria-label") || "")) || null;
   }
 
-  /** @returns {Promise<"ok"|"no-button"|"timeout">} */
+  /** @returns {Promise<"ok"|"partial"|"failed"|"no-button"|"timeout">} */
   async function syncAssignmentsApp() {
     const btn = assignmentsAppButton();
     if (!btn) return "no-button";
     const stored = new Promise((resolve) => {
       _assignmentWaiters.push(resolve);
-      setTimeout(() => resolve(false), ASSIGNMENTS_WAIT_MS);
+      setTimeout(() => resolve("timeout"), ASSIGNMENTS_WAIT_MS);
     });
     btn.click();
-    return (await stored) ? "ok" : "timeout";
+    return stored;
   }
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -537,12 +538,16 @@
       // The assignments frame stored a non-empty capture → release a waiting
       // sync. (An empty write is not proof of a capture — live: "+ assignments"
       // with 0 tasks.)
-      if (_assignmentWaiters.length &&
-          Object.keys(changes).some((k) => k.startsWith(ASSIGNMENT_KEY_PFX) &&
-            Array.isArray(changes[k].newValue) && changes[k].newValue.length > 0)) {
+      // A capture report with a final status (ok / partial / failed) also
+      // ends the wait, so a failed capture says why instead of timing out.
+      const rep = changes[CAPTURE_REPORT_KEY] && changes[CAPTURE_REPORT_KEY].newValue;
+      const outcome = rep && ["ok", "partial", "failed"].includes(rep.status) ? rep.status
+        : Object.keys(changes).some((k) => k.startsWith(ASSIGNMENT_KEY_PFX) &&
+            Array.isArray(changes[k].newValue) && changes[k].newValue.length > 0) ? "ok" : null;
+      if (_assignmentWaiters.length && outcome) {
         const waiters = _assignmentWaiters;
         _assignmentWaiters = [];
-        waiters.forEach((r) => r(true));
+        waiters.forEach((r) => r(outcome));
       }
       const wiped = Object.entries(changes).some(
         ([k, c]) => k.startsWith("tp:v1:") && c.newValue === undefined

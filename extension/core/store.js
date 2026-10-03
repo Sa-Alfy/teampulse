@@ -30,6 +30,9 @@ const KEY_POSTS_PFX       = `${KEY_PREFIX}posts:`;
 const KEY_ASSIGN_PFX      = `${KEY_PREFIX}assignments:`;
 const KEY_SYNC_PFX        = `${KEY_PREFIX}last-sync:`;
 const KEY_HEALTH          = `${KEY_PREFIX}scrape-health`;
+const KEY_KNOWN_CLASSES   = `${KEY_PREFIX}known-classes`;  // class names seen in Teams navigation
+const KEY_CAPTURE_REPORT  = `${KEY_PREFIX}capture-report`; // last assignments capture report
+const MAX_KNOWN_CLASSES   = 300;
 
 // ---------------------------------------------------------------------------
 // Backends
@@ -260,6 +263,70 @@ function createStore(backend) {
   }
 
   /**
+   * Merge a capture into a class's assignment list without losing data:
+   * only the tabs in okTabs (captured and confirmed loaded) are replaced;
+   * stored items of other tabs are kept unless the same assignment was just
+   * captured under another tab. A class with nothing stored and nothing new
+   * is not created.
+   *
+   * @param {string}   className
+   * @param {object[]} items    — captured items (any tab)
+   * @param {string[]} okTabs   — tabs whose capture is authoritative
+   * @param {string}   nowIso
+   * @returns {Promise<{ written: boolean, kept: number, added: number }>}
+   */
+  async function mergeAssignments(className, items, okTabs, nowIso) {
+    return enqueue(async () => {
+      const ok = new Set(okTabs || []);
+      const fresh = (items || []).filter((a) => ok.has(a.tab));
+      const idOf = (a) => a.assignmentId || a.rawId || null;
+      const freshIds = new Set(fresh.map(idOf).filter(Boolean));
+      const data = await backend.get([assignKey(className), KEY_CLASS_INDEX]);
+      const cur = Array.isArray(data[assignKey(className)]) ? data[assignKey(className)] : [];
+      const kept = cur.filter((a) => !ok.has(a.tab) && !(idOf(a) && freshIds.has(idOf(a))));
+      if (cur.length === 0 && fresh.length === 0) return { written: false, kept: 0, added: 0 };
+      const classIndex = Array.isArray(data[KEY_CLASS_INDEX]) ? data[KEY_CLASS_INDEX] : [];
+      await backend.set({
+        [assignKey(className)]: [...kept, ...fresh],
+        [syncKey(className)]: nowIso,
+        [KEY_CLASS_INDEX]: classIndex.includes(className) ? classIndex : [...classIndex, className],
+      });
+      return { written: true, kept: kept.length, added: fresh.length };
+    });
+  }
+
+  /** Remember a class name seen in Teams navigation (validates card class names). */
+  async function noteClass(className) {
+    return enqueue(async () => {
+      const data = await backend.get([KEY_KNOWN_CLASSES]);
+      const list = Array.isArray(data[KEY_KNOWN_CLASSES]) ? data[KEY_KNOWN_CLASSES] : [];
+      if (list.includes(className)) return;
+      await backend.set({ [KEY_KNOWN_CLASSES]: [...list, className].slice(-MAX_KNOWN_CLASSES) });
+    });
+  }
+
+  /** Class names seen in navigation plus classes that have stored posts. */
+  async function getKnownClasses() {
+    const index = await readClassIndex();
+    const data = await backend.get([KEY_KNOWN_CLASSES, ...index.map(postsKey)]);
+    const known = new Set(Array.isArray(data[KEY_KNOWN_CLASSES]) ? data[KEY_KNOWN_CLASSES] : []);
+    for (const cn of index) {
+      const posts = data[postsKey(cn)];
+      if (posts && Object.keys(posts).length > 0) known.add(cn);
+    }
+    return [...known];
+  }
+
+  async function setCaptureReport(report) {
+    return enqueue(() => backend.set({ [KEY_CAPTURE_REPORT]: report }));
+  }
+
+  async function getCaptureReport() {
+    const data = await backend.get([KEY_CAPTURE_REPORT]);
+    return data[KEY_CAPTURE_REPORT] || null;
+  }
+
+  /**
    * Record a scraper problem reported by a content script.
    * className === null → page-level problem (class could not be resolved).
    * Success is not recorded here: a later last-sync timestamp supersedes it.
@@ -337,6 +404,11 @@ function createStore(backend) {
   return {
     ingestPosts,
     ingestAssignments,
+    mergeAssignments,
+    noteClass,
+    getKnownClasses,
+    setCaptureReport,
+    getCaptureReport,
     recordHealth,
     getState,
     getFullState,
@@ -348,7 +420,7 @@ function createStore(backend) {
   };
 }
 
-const _store = { createStore, chromeBackend, memoryBackend, MAX_POSTS_PER_CLASS, KEY_PREFIX, KEY_CLASS_INDEX, KEY_HEALTH };
+const _store = { createStore, chromeBackend, memoryBackend, MAX_POSTS_PER_CLASS, KEY_PREFIX, KEY_CLASS_INDEX, KEY_HEALTH, KEY_CAPTURE_REPORT, KEY_KNOWN_CLASSES };
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = _store;

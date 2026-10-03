@@ -313,6 +313,9 @@ test("messages: all-classes TP_ASSIGNMENTS files each card under its own class a
   // Earlier bug: all cards were filed under the tab's last class.
   await store.ingestAssignments(STALE, [{ tab: "Past due", title: "wrongly filed" }], "2026-10-01T00:00:00Z");
   await handleMessage({ type: "TP_CLASS_CONTEXT", className: STALE }, teamsSender(3), deps);
+  // v0.6.4: card classes are validated against classes seen in Teams (Sync all classes visits them).
+  await handleMessage({ type: "TP_CLASS_CONTEXT", className: A }, teamsSender(3), deps);
+  await handleMessage({ type: "TP_CLASS_CONTEXT", className: B }, teamsSender(3), deps);
 
   const res = await handleMessage({
     type: "TP_ASSIGNMENTS",
