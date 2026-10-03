@@ -2,7 +2,7 @@
 
 ## 0.7.2 (2026-10-03, release): assignments sync stuck on Upcoming, card jump stuck behind it
 
-**Confirmed on live Teams by the owner (2026-10-03, one student account):** Sync no longer stalls on the empty Upcoming tab, and clicking an assignment card opens it in Teams. Promoted from pre-release to full release. Still unverified on live Teams: scrolling up to find older posts (0.7.1).
+**Confirmed on live Teams by the owner (2026-10-03, one student account):** Sync no longer stalls on the empty Upcoming tab, and clicking an assignment card opens it in Teams. Promoted from pre-release to full release. The owner then also confirmed that opening an older announcement scrolls up and finds the post (0.7.1 feature).
 
 Reported by the owner on live Teams (0.7.1, 2026-10-03, with a screenshot): after a sync or a card click, the Assignments app sat on an empty Upcoming tab. Clicking Past due by hand got it moving.
 
@@ -16,7 +16,7 @@ Reported by the owner on live Teams (0.7.1, 2026-10-03, with a screenshot): afte
 - **Click a card to go there.** An announcement opens its class in your Teams tab, then scrolls to the post and outlines it. If the post isn't loaded yet, it scrolls up for up to 8 rounds to load older posts. An assignment opens the Teams Assignments app. After that app's own capture finishes, it selects the item's tab (Upcoming / Past due), scrolls to the card and outlines it. It does not click the card, because opening it would start a capture of a page with no list. Text is now expanded with **Show more**. Enter on a focused card also opens it.
 - **How:** like Sync, the popup stores a command (`tp:nav:cmd`, ignored after 2 minutes). It then brings forward a Teams tab the background already knows from its per-tab class notes, or opens `https://teams.cloud.microsoft/` in a new tab. Only the visible Teams tab acts. Posts are found with the capture's own `extractPosts()`, by timestamp plus subject or body start, so no new selectors were added. Assignment cards are matched by assignment id, else by title (and class, in the all-classes view). If something isn't found, a short text-only note appears on the Teams page.
 - **No new permissions:** `chrome.tabs.update` / `create` and `chrome.windows.update` work without the `tabs` permission. This is proven in the e2e test, which loads the unpacked extension.
-- **Verified:** `node --test` 103 pass; `npm run test:dom` 45/45 (8 new: post found / body match / not found / stale command / frame card; popup post / task / new tab); `npm run test:e2e` 5/5 (new: real tab switch, post outlined). **Not verified on real Teams:** finding older posts by scrolling up, and the Assignments-app card jump.
+- **Verified:** `node --test` 103 pass; `npm run test:dom` 45/45 (8 new: post found / body match / not found / stale command / frame card; popup post / task / new tab); `npm run test:e2e` 5/5 (new: real tab switch, post outlined). **Not verified on real Teams** at release: finding older posts by scrolling up, and the Assignments-app card jump. (Both later confirmed on live Teams by the owner with v0.7.2.)
 
 ## 0.7.0 (2026-10-03, pre-release): popup redesign for students
 
