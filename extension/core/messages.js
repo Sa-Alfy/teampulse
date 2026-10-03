@@ -256,14 +256,9 @@ async function handleMessage(msg, sender, deps) {
         return verdict(reject(`assignments[${i}].className is invalid`));
       }
     }
-    // All-classes cards name their class; one that doesn't (live 2026-10-03:
-    // Completed cards read "Submitted at …", which hid the class line) goes to
-    // the Unmatched bucket instead of rejecting the whole batch.
+    // All-classes cards name their class; one that doesn't is dropped (and
+    // counted) instead of rejecting the whole batch (live 2026-10-03).
     const allClasses = msg.scope === "all-classes";
-    let classless = 0;
-    if (allClasses) {
-      for (const a of assignments) if (a.className === undefined) { a.className = UNMATCHED_CLASS; classless++; }
-    }
 
     // Tabs whose capture is authoritative. Older senders (no okTabs) captured
     // all three tabs in one go.
@@ -278,25 +273,25 @@ async function handleMessage(msg, sender, deps) {
       return verdict({ ok: true, stored: false, reason: "no tab confirmed; stored assignments kept" });
     }
 
-    // Each card that names its class is filed there (validated against
-    // classes seen in Teams); the rest go under the tab's class context.
+    // Each card that names its class is filed there, but only for classes
+    // seen in Teams (opened, or visited by Sync all classes — which skips
+    // hidden teams). Owner's choice (2026-10-03): cards of old or hidden
+    // classes are dropped. Cards without a class line go under the tab's
+    // class context (class view) or are dropped (all-classes view).
     const known = store.getKnownClasses ? await store.getKnownClasses() : [];
     const byNorm = new Map(known.map((k) => [normClass(k), k]));
-    let unmatched = 0;
+    let droppedUnknownClass = 0;
+    let droppedClassless = 0;
     let context = null;
     const byClass = new Map();
     for (const a of assignments) {
       let target;
       if (a.className !== undefined) {
-        target = a.className === UNMATCHED_CLASS ? null
-          : byNorm.size === 0 ? a.className : byNorm.get(normClass(a.className));
-        if (!target && a.className === UNMATCHED_CLASS) {
-          target = UNMATCHED_CLASS;
-        } else if (!target) {
-          unmatched++;
-          target = UNMATCHED_CLASS;
-          a.details = [a.details, a.className].filter(Boolean).join(" · ");
-        }
+        target = byNorm.get(normClass(a.className));
+        if (!target) { droppedUnknownClass++; continue; }
+      } else if (allClasses) {
+        droppedClassless++;
+        continue;
       } else {
         if (context === null) context = (await session.get(tabCtxKey(tabId))) || "";
         if (!context) {
@@ -320,6 +315,10 @@ async function handleMessage(msg, sender, deps) {
         if (!byClass.has(cn)) byClass.set(cn, []);
       }
     }
+    // v0.6.4–0.6.6 filed unknown classes under "Unmatched": clear that bucket.
+    if (store.mergeAssignments && !byClass.has(UNMATCHED_CLASS)) {
+      await store.mergeAssignments(UNMATCHED_CLASS, [], ASSIGNMENT_TABS, now);
+    }
 
     let classesWritten = 0;
     for (const [cn, items] of byClass) {
@@ -331,10 +330,10 @@ async function handleMessage(msg, sender, deps) {
     return verdict(ok(), {
       okTabs,
       classesWritten,
-      unmatched,
-      classless,
+      droppedUnknownClass,
+      droppedClassless,
       classValidation: byNorm.size ? "known-classes" : "no-known-classes",
-      health: unmatched || classless ? "unmatched-classes" : "ok",
+      health: byNorm.size ? "ok" : "no-known-classes",
     });
   }
 

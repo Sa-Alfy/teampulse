@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.7 (unreleased): only current (unhidden) classes
+
+- Owner's choice: assignments from old or hidden classes are dropped and counted in the report as "not a visited class". A class counts as current once you open it or Sync all classes visits it (Sync skips hidden teams). All-classes cards without a class line are dropped too.
+- The "Unmatched" bucket from 0.6.4–0.6.6 is removed. Any stored items in it are cleared on the next capture.
+- With no known classes yet (before the first sync), class-named cards are dropped and the report says `no-known-classes`.
+
 ## 0.6.6 (unreleased): completed assignments shown as Upcoming
 
 Live 0.6.5 report (2026-10-03): accepted, 33 cards. Upcoming kept 10 cards, and Completed then de-duplicated the same 10.

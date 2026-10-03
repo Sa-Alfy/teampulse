@@ -113,7 +113,7 @@ test("all-classes: a stored class absent from the batch is cleared only when all
 
 // ── Class attribution (H7) ──────────────────────────────────────────────────
 
-test("per-card class beats tab context; unknown card class → 'Unmatched' bucket + health flag", async () => {
+test("per-card class beats tab context; card of an unvisited (old/hidden) class is dropped", async () => {
   const { store, backend, deps, session, seeClass } = setup();
   await seeClass(C204);
   await seeClass(C304); // the class whose tab is open
@@ -129,10 +129,11 @@ test("per-card class beats tab context; unknown card class → 'Unmatched' bucke
   const st = (await store.getState()).classes;
   assert.deepStrictEqual(st[C204].assignments.map((a) => a.title), ["Lab Report (Experiment 5)"]);
   assert.deepStrictEqual(st[C304].assignments.map((a) => a.title), ["No class line"]);
-  assert.deepStrictEqual(st.Unmatched.assignments.map((a) => a.title), ["Mystery"]);
+  assert.ok(!st.Unmatched || st.Unmatched.assignments.length === 0, "no Unmatched bucket");
+  assert.ok(!JSON.stringify(st).includes("Mystery"), "old/hidden class card not stored");
   const rep = backend._raw[KEY_CAPTURE_REPORT];
-  assert.strictEqual(rep.background.unmatched, 1);
-  assert.strictEqual(rep.background.health, "unmatched-classes");
+  assert.strictEqual(rep.background.droppedUnknownClass, 1);
+  assert.strictEqual(rep.background.health, "ok");
 });
 
 test("capture report is sanitized: no titles or class names survive", async () => {

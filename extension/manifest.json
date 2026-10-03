@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "TeamsPulse",
-  "version": "0.6.6",
+  "version": "0.6.7",
   "description": "Daily academic briefing from Microsoft Teams — new posts only.",
   "permissions": ["alarms", "storage", "unlimitedStorage"],
   "content_security_policy": {
