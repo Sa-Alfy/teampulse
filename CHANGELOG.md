@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.7.0 (unreleased): popup redesign for students
+## 0.7.0 (2026-10-03, pre-release): popup redesign for students
 
 - **Overview tab (new default):** a one-line summary ("2 overdue · 1 today"), the next thing due, then everything sorted by urgency: Overdue, Today, Tomorrow, This week, Later, No due date. Assignments overdue for more than 14 days are folded behind "Show N older".
 - **Exams and quizzes on the agenda:** dated CT/Quiz, Exam, Presentation, Deadline, Reschedule and Cancelled announcements show up next to assignments. Repeats of the same class, day and kind are merged. One is skipped when an assignment due that day has its title in the post.
