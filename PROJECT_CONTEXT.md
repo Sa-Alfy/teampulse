@@ -461,10 +461,11 @@ Teams tab → extension (scrapes, fingerprints) → delta push → Worker + D1
 - **409 retry idea (not built):** add `classes.version`; `loadPrev` reads it; the write batch starts with `UPDATE classes SET version = CASE WHEN version = ? THEN version + 1 ELSE NULL END WHERE name = ?` against a `NOT NULL` column, so a stale version fails the statement and D1 rolls back the whole batch. The Worker answers 409 and the extension retries the class once with fresh state.
 
 **Phase 3: Telegram**
-- [ ] Webhook with `X-Telegram-Bot-Api-Secret-Token` check, pairing via `/start <code>` (one-time, expiring), chat-ID allowlist
-- [ ] Alerts from the events outbox, priority + quiet hours (`not_before`)
-- [ ] Commands: `/today`, `/week`, `/due`, `/plan`, `/done <n>` (numbers from the last `/due` list), `/undone` (lists done items) and `/undone <n>`
-- [ ] "Last synced N h ago" in replies
+Built on `feat/selfhost-v1` (2026-10-05), tested with a fake D1 and a fake Telegram API (`test/selfhost-telegram.test.js`, 16 tests). **Not verified against the real Telegram API**: the webhook is registered (`setWebhook` with `secret_token`) and the pairing code created by `/setup` in S5.
+- [x] `POST /telegram/webhook`: `X-Telegram-Bot-Api-Secret-Token` format checked before any D1 read, then compared as sha256 hex in constant time (`tg_secret_hash`); 503 when unset; 415 / 413 (64 KiB) / 400. Only private-chat text messages are handled; everything else gets an empty 200.
+- [x] Pairing: `/start <code>`, 10 chars from a 32-letter alphabet without 0/O/1/I (≈ 2^50), stored as a hash, 10 min expiry, single use, the 5th wrong code disables it. After pairing, other chats get no reply and cause no D1 write.
+- [x] Commands `/today` `/week` `/due` `/plan` `/done <n>` `/undone` `/undone <n>` (`selfhost/core/bot.js`); numbered lists are stored for 24 h; unknown commands show help. Replies go back in the webhook response (`method: sendMessage`, no extra subrequest), plain text, link previews off, every reply ends with "Last synced N h ago".
+- [x] Outbox sender (`flushOutbox`): rows with `not_before <= now` (quiet hours) are claimed with a 2 min lease (`UPDATE … RETURNING id`, a separate write by design), grouped into messages ≤ 3500 chars, at most 10 messages per flush, stop on 429, up to 8 attempts. `sent_at` is written only after Telegram answers `ok: true`. Ingest flushes inline via `ctx.waitUntil` only when it created 1–5 events; larger batches wait for the S4 cron. Logs carry counts and HTTP status codes only (test: no token, no text).
 
 **Phase 4: Reminders**
 - [ ] One cron trigger every 5 min runs the planner; idempotent via `reminders_sent`

@@ -22,7 +22,7 @@ export function createD1({ migrationsDir = null } = {}) {
     calls.execs++;
     if (calls.failOn && calls.failOn.test(sql)) throw new Error("injected failure");
     const st = sqlite.prepare(sql);
-    if (READ.test(sql)) return { results: st.all(...params), success: true, meta: {} };
+    if (READ.test(sql) || /\bRETURNING\b/i.test(sql)) return { results: st.all(...params), success: true, meta: {} };
     const r = st.run(...params);
     return { results: [], success: true, meta: { changes: Number(r.changes) } };
   }

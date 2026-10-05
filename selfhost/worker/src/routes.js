@@ -5,6 +5,11 @@ import validateMod from "../../core/validate.js";
 import authMod from "../../core/auth.js";
 import { json, error, log, readCapped } from "./http.js";
 import { getSettings, prefs, loadPrev, writeStatements } from "./store.js";
+import { flushOutbox } from "./telegram.js";
+
+// A few events go out right away; bigger batches wait for the 5-minute cron (S4)
+// so one ingest call never formats and sends a large outbox inside its CPU budget.
+const FLUSH_INLINE_MAX = 5;
 
 const { diffSync, assignmentKey, postKey } = diffMod;
 const { validateIngest, LIMITS } = validateMod;
@@ -43,7 +48,7 @@ async function authorize(request, db, now) {
   return {};
 }
 
-export async function ingest(request, env, now) {
+export async function ingest(request, env, now, ctx) {
   const db = env.DB;
   const auth = await authorize(request, db, now);
   if (auth.response) return auth.response;
@@ -75,6 +80,9 @@ export async function ingest(request, env, now) {
     cls: p.class, classState, upserts: res.upserts, events: res.events, syncId: p.syncId, at: now, prefs: p2,
   }));
 
+  if (ctx && res.events.length > 0 && res.events.length <= FLUSH_INLINE_MAX) {
+    ctx.waitUntil(flushOutbox(env, now).catch((e) => log({ route: "outbox", status: 500, err: e && e.name ? String(e.name) : "Error" })));
+  }
   log({ route: "ingest", status: 200, bytes: body.bytes, a: p.assignments.length, p: p.posts.length,
         up: res.upserts.length, ev: res.events.length, col: res.stats.collisions });
   return json(200, {
