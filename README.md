@@ -107,6 +107,7 @@ teampulse/
 │   ├── background.js                ← service worker: message router + badge
 │   ├── popup.html / popup.css / popup.js
 │   └── icons/
+├── selfhost/core/                   ← self-host core (branch feat/selfhost-v1): diff, reminders, plan, formatters
 ├── tools/
 │   ├── dom-probe.js                 ← read-only console probe: channel view
 │   └── dom-probe-teams-list.js      ← read-only console probe: classes grid
@@ -131,7 +132,7 @@ Optional and advanced. This path has not been recently verified. It runs the scr
 
 ### Planned cloud self-host platform
 
-**Status (2026-10-04): planned. Nothing below is built.** The intended next-generation self-host path uses Cloudflare Workers + D1: the extension collects and fingerprints Teams data, then an opt-in server handles change alerts, 24-hour / 3-hour reminders, Telegram commands, and an `.ics` feed. The server will not log into Teams or store a Teams session. The existing Express server remains the legacy self-host API until the Worker reaches parity.
+**Status (2026-10-05): in progress on branch `feat/selfhost-v1`, not on `main`.** Stage S1 (the pure core in `selfhost/core/`: change detection, reminder planning, `/plan` ranking, message formatting) is built and tested. There is no Worker, database, Telegram bot or deploy guide yet. The intended next-generation self-host path uses Cloudflare Workers + D1: the extension collects and fingerprints Teams data, then an opt-in server handles change alerts, 24-hour / 3-hour reminders, Telegram commands, and an `.ics` feed. The server will not log into Teams or store a Teams session. The existing Express server remains the legacy self-host API until the Worker reaches parity.
 
 The extension remains the no-setup path. The full phased roadmap, evidence requirements, security rules, and open decisions are in [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) under **Self-Host Platform Roadmap**.
 

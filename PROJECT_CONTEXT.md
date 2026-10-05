@@ -379,7 +379,7 @@ flowchart TD
 
 ## 6. Self-Host Platform Roadmap (Cloudflare Workers + D1)
 
-> **Status (2026-10-04): PLANNED. Nothing below is built.** Mark an item `[x]` only with evidence (test output, a curl result, a live check) and write that evidence next to it.
+> **Status (2026-10-05): S1 (Phase 1, pure core) built on branch `feat/selfhost-v1` (commit `e06c461`), not merged to `main`. Everything after Phase 1 is still planned.** Mark an item `[x]` only with evidence (test output, a curl result, a live check) and write that evidence next to it.
 
 ### 6.1 Goal
 Make the self-host side the powerful, still easy-to-set-up half of TeamsPulse. The extension stays the simple path (Level 0, no setup). The server adds automatic, no-browser-needed value: change alerts, deadline reminders, a Telegram bot, a calendar feed.
@@ -419,7 +419,7 @@ Teams tab → extension (scrapes, fingerprints) → delta push → Worker + D1
 | D1 free tier | Daily row read/write limits are enforced (since 2026-09-01) | Index every lookup, avoid full scans |
 
 ### 6.5 Unverified (check before relying on)
-- [ ] Wrangler's minimum Node version (local Node is v24.19.0)
+- [x] Wrangler's minimum Node version: `npm view wrangler` → 4.147.0, `engines.node >=22.0.0` (2026-10-05); local Node v24.19.0 is fine
 - [ ] D1 FTS5 support (for full-text search)
 - [ ] Whether a "Deploy to Cloudflare" button works for this repo
 - [ ] Real CPU cost of ingest on a realistic payload (measure in Phase 2)
@@ -434,11 +434,13 @@ Teams tab → extension (scrapes, fingerprints) → delta push → Worker + D1
 - [ ] Store submission still takes priority over this roadmap
 
 **Phase 1: Host-agnostic core (pure modules, no I/O)**
-- [ ] Diff engine keyed by the existing stable id/fingerprint
-- [ ] Event types: `new_assignment`, `due_date_changed` (old/new), `assignment_submitted`, `assignment_removed`, `new_post`, `tagged_post` (reuse `classify`; no new regexes)
-- [ ] Reminder planner: (items, now) → due reminders at 24 h / 3 h, skipping submitted items
-- [ ] Message formatters for alerts and digests
-- [ ] Tests: idempotent diff (same payload twice = 0 events); existing suite still green (baseline 103 pass, 1 skipped)
+- [x] Diff engine keyed by the existing stable id/fingerprint (`selfhost/core/diff.js`). Key = Teams GUID, else class + normalized title (no due date; `rawId` deliberately not used because a non-GUID element id may be positional). Evidence: `test/selfhost-core.test.js`, 34/34 pass (2026-10-05).
+- [x] Event types: `new_assignment`, `due_date_changed` (old/new), `assignment_submitted`, `assignment_removed`, `new_post`, `tagged_post` (reuse `classify`; no new regexes). Event id = sha256(type, key, old, new, syncId).
+- [x] Reminder planner (`selfhost/core/reminders.js`): 24 h / 3 h slots, skips submitted / done / removed, one-time `due_soon` when first seen < 3 h before due, quiet hours defer only the 24 h slot.
+- [x] Message formatters (`selfhost/core/format.js`): plain text only (no `parse_mode`), control/bidi characters stripped, "Last synced N h ago" footer.
+- [x] `/today` `/week` `/due` selections and deterministic `/plan` with crunch days (`selfhost/core/agenda.js`); timezone helpers (`selfhost/core/time.js`, default `Asia/Dhaka`); server-side due-date resolver with tab-aware year rule (`selfhost/core/dates.js`).
+- [x] Run on a real local capture (14 assignments, file kept out of git in `local-captures/`): baseline 0 events; replay 0 events, 0 writes. Synthetic worst case (300 assignments + 200 posts) 3.8 ms median Node wall time on the dev machine; **not** a Worker CPU measurement.
+- [x] Tests: idempotent diff (same payload twice = 0 events); existing suite still green: `node --test` 137 pass, 1 skipped; `test:dom` 47/47; `test:e2e` 5/5 (2026-10-05)
 
 **Phase 2: Worker + D1**
 - [ ] Schema + migrations: items, events, reminders_sent, settings; indexes on every lookup
@@ -482,6 +484,19 @@ Teams tab → extension (scrapes, fingerprints) → delta push → Worker + D1
 - [ ] Teams notification emails as a second data source (check whether the university mailbox receives them)
 - [ ] Student portal as a source (not examined yet)
 
+### 6.6a Decisions for self-host v1 (owner, 2026-10-05)
+- Posts are pushed as deltas; assignments as a full snapshot per covered class (removals can't be detected from deltas).
+- Diff runs in the pure JS module over rows read with one indexed query; only changed rows are written.
+- The extension computes `dueIso` in the browser's timezone; the server treats it as given. Year-less fallback: an Upcoming date > 60 days in the past rolls to next year; a Past due date in the future rolls to last year.
+- A class is fully covered only when all three tabs were captured. Removal = fully covered AND missing in 2 syncs with different syncIds at least 1 h apart. Baseline lasts until the first fully covered sync.
+- Submitted = tab `Completed`; event only on false → true.
+- Fallback-key collisions in one snapshot: skip due-date events for them and count the collision.
+- `/done <n>`: marks an item done server-side until the next sync reconciles it.
+- Claim flow: `/setup` requires the student's bot token (constant-time compare, D1-counter rate limit), then closes; `/rotatekey` from the paired chat; `/health` returns booleans only.
+- Daily digest (S4): default 07:30 Asia/Dhaka, configurable, can be turned off.
+- Any change under `extension/` for S6 stays on the branch and is not merged to `main` before the store submission; a test must prove the store build has no network code.
+- **Flagged, not fixed (extension):** `shape.js:118-122` falls back to `new Date().getFullYear()` when the frame could not infer a date. The frame's `inferDueDate` already picks the year by tab, so only that fallback path is affected.
+
 ### 6.7 Security rules (apply to every phase)
 - HTTPS only; random per-instance API key; fail closed; payload size caps.
 - All ingested text is hostile: store as plain text, never interpolate into HTML, SQL strings, shell, or logs.
@@ -523,7 +538,7 @@ Teams tab → extension (scrapes, fingerprints) → delta push → Worker + D1
 
 ## 8. Test Coverage
 
-Counts as of v0.7.3 (2026-10-03): `node --test` 104 (103 pass, 1 skipped placeholder) · `npm run test:dom` 47 · `npm run test:e2e` 5, all passing.
+Counts on `main` as of v0.7.3 (2026-10-03): `node --test` 104 (103 pass, 1 skipped placeholder). On branch `feat/selfhost-v1` (2026-10-05): 138 (137 pass, 1 skipped), with 34 tests in `test/selfhost-core.test.js` · `npm run test:dom` 47 · `npm run test:e2e` 5, all passing.
 
 ### Unit Tests (`npm test` — `node --test`, 104 total: 103 pass, 1 skipped placeholder)
 
