@@ -9,17 +9,21 @@
  *   }
  *   sync = {
  *     syncId, at (ms), tz,
- *     covered:     [{ class, tabs: [...] }],
+ *     covered:     [{ class, tabs: [...], postsCaptured?: bool }],
  *     assignments: [{ class, assignmentId?, title, dueIso?, dueDate?, dueRaw?, details?, tab }],
  *     posts:       [{ class, id, author?, subject?, body?, ts?, isBot?, isAnnouncement?, attachmentCount? }],
  *   }
  *
  * Rules:
  *   - A class's assignments are baselined (stored, zero events) until the first
- *     sync that covers all three tabs; posts until the class's first post batch.
+ *     sync that covers all three tabs (a loaded but empty tab counts); posts
+ *     until the first sync whose covered[] entry says postsCaptured: true
+ *     (zero posts is fine). Posts of a class not captured are stored silently.
  *   - Removal: class fully covered AND item missing in 2 syncs with different
  *     syncIds at least REMOVAL_MIN_GAP_MS apart.
  *   - Submitted = tab "Completed"; an event only on false → true.
+ *   - due_date_changed only for open items (not Completed).
+ *   - /done (doneAt) is sticky; a sync clears it only when Teams shows Completed.
  *   - Two snapshot items with the same key: no due-date events for that key.
  *   - Event ids hash (type, key, old, new, syncId): replaying a sync never
  *     duplicates, and a date that moves back and forth still alerts each time.
@@ -33,6 +37,7 @@ const { sha256Hex } = require("../../extension/core/fingerprint");
 const { classify, isNoteworthy } = require("../../extension/core/digest-utils");
 const { ASSIGNMENT_TABS, SUBMITTED_TAB, REMOVAL_MIN_GAP_MS, MAX_TEXT } = require("./config");
 const { resolveDueIso } = require("./dates");
+const { clip: clipText } = require("./text");
 
 const NOTICE_TAG = classify("");
 
@@ -51,8 +56,7 @@ function postKey(p) {
 }
 
 function clip(s, max = MAX_TEXT) {
-  const t = String(s || "");
-  return t.length > max ? t.slice(0, max) : t;
+  return clipText(s, max);
 }
 
 const ASSIGN_FIELDS = ["class", "title", "dueIso", "tab", "submitted", "firstSeen", "missingSyncId", "missingAt", "removedAt", "doneAt"];
@@ -104,8 +108,8 @@ async function diffSync(prev, sync) {
     } else {
       rec = { ...old, class: cn, title: clip(a.title), tab: a.tab, submitted,
               dueIso: dueIso || old.dueIso, missingSyncId: null, missingAt: null };
-      if (old.doneAt && at > old.doneAt) rec.doneAt = null; // the sync reconciles /done
-      if (live && dueIso && old.dueIso !== dueIso && !collided.has(key)) {
+      if (submitted) rec.doneAt = null; // Teams now confirms it; the manual mark is no longer needed
+      if (live && !submitted && dueIso && old.dueIso !== dueIso && !collided.has(key)) {
         pending.push(["due_date_changed", key, old.dueIso || null, dueIso, { ...info, old: old.dueIso || null, new: dueIso }]);
       }
       if (live && submitted && !old.submitted) {
@@ -133,10 +137,8 @@ async function diffSync(prev, sync) {
 
   // ── Posts (delta: only ids the server has not stored) ───────────────────
   const seenPosts = new Set();
-  const postClasses = new Set();
   for (const p of sync.posts || []) {
     const key = postKey(p);
-    postClasses.add(p.class);
     if (seenPosts.has(key) || prev.items.has(key)) continue;
     seenPosts.add(key);
     const text = `${p.subject || ""} ${p.body || ""}`.trim();
@@ -147,12 +149,12 @@ async function diffSync(prev, sync) {
       subject: p.subject, body: p.body, isBot: !!p.isBot, isAnnouncement: !!p.isAnnouncement,
       attachments: new Array(Math.max(0, p.attachmentCount | 0)),
     });
-    if (ensure(p.class).p && noteworthy) {
+    if (classes[p.class] && classes[p.class].p && noteworthy) {
       const payload = { class: p.class, subject: clip(p.subject), snippet: clip(p.body), ts: p.ts || null, tag };
       pending.push([tag === NOTICE_TAG ? "new_post" : "tagged_post", key, null, null, payload]);
     }
   }
-  for (const cn of postClasses) ensure(cn).p = true;
+  for (const c of sync.covered || []) if (c.postsCaptured === true) ensure(c.class).p = true;
 
   const events = [];
   for (const [type, key, oldV, newV, payload] of pending) {

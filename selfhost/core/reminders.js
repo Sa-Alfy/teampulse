@@ -2,7 +2,7 @@
  * selfhost/core/reminders.js — Which reminders are due now. Pure.
  *
  * Slots (config.REMINDER_SLOTS): "24h" fires in [due-24h, due-3h), "3h" in [due-3h, due).
- *   - Open items only: not submitted, not marked done, not removed.
+ *   - Open items only: not submitted, not removed, no /done mark still holding.
  *   - First seen less than 24 h before due → no 24h reminder (the new-assignment
  *     alert already said when it is due).
  *   - First seen less than 3 h before due → the 3h slot is sent as a one-time
@@ -22,8 +22,15 @@ function reminderId(itemKey, dueIso, slot) {
   return `${itemKey}\0${dueIso}\0${slot}`;
 }
 
-function isOpen(r) {
-  return r.kind === "a" && !r.removedAt && !r.submitted && !r.doneAt;
+/** A /done mark holds until the due date passes (or Teams shows Completed, which clears it in diff). */
+function doneHolds(r, now) {
+  if (!r.doneAt) return false;
+  const due = Date.parse(r.dueIso || "");
+  return Number.isNaN(due) || now < due;
+}
+
+function isOpen(r, now) {
+  return r.kind === "a" && !r.removedAt && !r.submitted && !doneHolds(r, now);
 }
 
 /**
@@ -37,7 +44,7 @@ function planReminders(items, sent, now, opts) {
   const quiet = isQuiet(now, opts.tz, opts.quiet);
   const out = [];
   for (const r of items) {
-    if (!isOpen(r) || !r.dueIso) continue;
+    if (!isOpen(r, now) || !r.dueIso) continue;
     const due = Date.parse(r.dueIso);
     if (Number.isNaN(due) || now >= due) continue;
 
@@ -57,4 +64,4 @@ function planReminders(items, sent, now, opts) {
   return out.sort((a, b) => Date.parse(a.dueIso) - Date.parse(b.dueIso));
 }
 
-module.exports = { planReminders, reminderId, isOpen };
+module.exports = { planReminders, reminderId, isOpen, doneHolds };

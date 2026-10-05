@@ -12,11 +12,11 @@
 
 const { HOUR, DAY, OVERDUE_WINDOW_DAYS, WEEK_DAYS, PLAN_HORIZON_DAYS, CRUNCH_THRESHOLD } = require("./config");
 const { dayKey, addDays, startOfDay } = require("./time");
-const { isOpen } = require("./reminders");
+const { isOpen, doneHolds } = require("./reminders");
 
-function dated(items) {
+function dated(items, now) {
   return items
-    .filter((r) => isOpen(r) && r.dueIso && !Number.isNaN(Date.parse(r.dueIso)))
+    .filter((r) => isOpen(r, now) && r.dueIso && !Number.isNaN(Date.parse(r.dueIso)))
     .map((r) => ({ ...r, dueMs: Date.parse(r.dueIso) }));
 }
 
@@ -25,24 +25,24 @@ function byDue(a, b) {
 }
 
 function overdue(items, now) {
-  return dated(items).filter((r) => r.dueMs < now && r.dueMs >= now - OVERDUE_WINDOW_DAYS * DAY).sort(byDue);
+  return dated(items, now).filter((r) => r.dueMs < now && r.dueMs >= now - OVERDUE_WINDOW_DAYS * DAY).sort(byDue);
 }
 
 /** Recent overdue + everything due before the end of today. */
 function selectToday(items, now, tz) {
   const end = startOfDay(addDays(dayKey(now, tz), 1), tz);
-  return { overdue: overdue(items, now), due: dated(items).filter((r) => r.dueMs >= now && r.dueMs < end).sort(byDue) };
+  return { overdue: overdue(items, now), due: dated(items, now).filter((r) => r.dueMs >= now && r.dueMs < end).sort(byDue) };
 }
 
 /** Due from now through the end of the 7th local day (today counts as day 1). */
 function selectWeek(items, now, tz) {
   const end = startOfDay(addDays(dayKey(now, tz), WEEK_DAYS), tz);
-  return { overdue: overdue(items, now), due: dated(items).filter((r) => r.dueMs >= now && r.dueMs < end).sort(byDue) };
+  return { overdue: overdue(items, now), due: dated(items, now).filter((r) => r.dueMs >= now && r.dueMs < end).sort(byDue) };
 }
 
 /** Every open dated item: recent overdue first, then upcoming. Numbering for /done follows this order. */
 function selectDue(items, now) {
-  return [...overdue(items, now), ...dated(items).filter((r) => r.dueMs >= now).sort(byDue)];
+  return [...overdue(items, now), ...dated(items, now).filter((r) => r.dueMs >= now).sort(byDue)];
 }
 
 function bucket(dueMs, now) {
@@ -57,7 +57,7 @@ function bucket(dueMs, now) {
 function buildPlan(items, now, tz, opts = {}) {
   const threshold = opts.crunchThreshold || CRUNCH_THRESHOLD;
   const horizonEnd = startOfDay(addDays(dayKey(now, tz), PLAN_HORIZON_DAYS), tz);
-  const pool = dated(items).filter((r) => r.dueMs < horizonEnd && r.dueMs >= now - OVERDUE_WINDOW_DAYS * DAY);
+  const pool = dated(items, now).filter((r) => r.dueMs < horizonEnd && r.dueMs >= now - OVERDUE_WINDOW_DAYS * DAY);
   const ranked = pool
     .map((r) => ({ ...r, bucket: bucket(r.dueMs, now) }))
     .sort((a, b) => a.bucket - b.bucket || byDue(a, b));
@@ -72,8 +72,25 @@ function buildPlan(items, now, tz, opts = {}) {
     .filter(([, n]) => n >= threshold)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([day, count]) => ({ day, count }));
-  const undated = items.filter((r) => isOpen(r) && !r.dueIso).length;
+  const undated = items.filter((r) => isOpen(r, now) && !r.dueIso).length;
   return { ranked, crunchDays, undated };
 }
 
-module.exports = { selectToday, selectWeek, selectDue, buildPlan, bucket };
+/** Items whose /done mark still holds, soonest due first. Numbering for /undone follows this order. */
+function selectDone(items, now) {
+  return items
+    .filter((r) => r.kind === "a" && !r.removedAt && !r.submitted && doneHolds(r, now))
+    .map((r) => ({ ...r, dueMs: Date.parse(r.dueIso || "") }))
+    .sort((a, b) => (a.dueMs || Infinity) - (b.dueMs || Infinity) || String(a.key).localeCompare(String(b.key)));
+}
+
+/** /done and /undone return a new record; the host writes it. */
+function markDone(rec, now) {
+  return { ...rec, doneAt: now };
+}
+
+function markUndone(rec) {
+  return { ...rec, doneAt: null };
+}
+
+module.exports = { selectToday, selectWeek, selectDue, selectDone, markDone, markUndone, buildPlan, bucket };

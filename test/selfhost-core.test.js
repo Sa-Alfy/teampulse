@@ -88,7 +88,7 @@ test("dates: dueIso with offset passes through; no time → 23:59 local; nothing
 
 const A = "Summer_2026_CSE 312 (V1)";
 const B = "Summer_2026_CSE 304 (V1)";
-const FULL = (cn) => ({ class: cn, tabs: ASSIGNMENT_TABS.slice() });
+const FULL = (cn) => ({ class: cn, tabs: ASSIGNMENT_TABS.slice(), postsCaptured: true });
 
 function asg(id, over = {}) {
   return { class: A, assignmentId: id, title: `Lab ${id}`, tab: "Upcoming", dueIso: "2026-10-10T17:59:00.000Z", ...over };
@@ -246,19 +246,88 @@ test("diff: posts — classify tags, non-noteworthy posts stored silently, dupli
   assert.strictEqual(r.upserts.filter((u) => u.kind === "p").length, 3);
 });
 
-test("diff: first post batch of a class is a baseline", async () => {
+test("diff: posts of a class whose posts were not captured are stored silently and do not baseline it", async () => {
   const st = await baselined();
-  const r = await diffSync(st, sync("s2", T0 + HOUR, { covered: [], posts: [post("q1", { class: B, body: "Quiz tomorrow" })] }));
+  const r = apply(st, await diffSync(st, sync("s2", T0 + HOUR, { covered: [], posts: [post("q1", { class: B, body: "Quiz tomorrow" })] })));
   assert.strictEqual(r.events.length, 0);
-  assert.strictEqual(r.classes[B].p, true);
+  assert.ok(!r.classes[B] || r.classes[B].p === false);
+  assert.ok(st.items.has("p:" + "q1".padEnd(64, "0")));
+  const r2 = apply(st, await diffSync(st, sync("s3", T0 + 2 * HOUR, { covered: [{ class: B, tabs: [], postsCaptured: false }], posts: [post("q2", { class: B, body: "Quiz moved" })] })));
+  assert.strictEqual(r2.events.length, 0);
+  assert.ok(!r2.classes[B] || r2.classes[B].p === false);
 });
 
-test("diff: a later sync clears a server-side /done mark", async () => {
+test("diff: postsCaptured: true baselines a class even with zero posts; the next new post alerts", async () => {
+  const st = await baselined();
+  const cap = [FULL(A), { class: B, tabs: [], postsCaptured: true }];
+  const r1 = apply(st, await diffSync(st, sync("s2", T0 + HOUR, { covered: cap, assignments: [asg("g1"), asg("g2")], posts: [] })));
+  assert.strictEqual(r1.events.length, 0);
+  assert.strictEqual(r1.classes[B].p, true);
+  assert.strictEqual(r1.classes[B].a, false, "posts captured does not baseline assignments");
+  const r2 = await diffSync(st, sync("s3", T0 + 2 * HOUR, { covered: cap, assignments: [asg("g1"), asg("g2")], posts: [post("q3", { class: B, body: "Quiz on Monday" })] }));
+  assert.deepStrictEqual(r2.events.map((e) => e.type), ["tagged_post"]);
+});
+
+test("diff: an assignment tab that loaded empty still counts as captured and ends the baseline", async () => {
+  // The real capture has an empty Upcoming tab (confirmed in Teams): covered lists it, no item has it.
+  const st = newState();
+  const r1 = apply(st, await diffSync(st, sync("s1", T0, { assignments: [asg("x", { tab: "Past due" }), asg("y", { tab: "Completed" })] })));
+  assert.strictEqual(r1.events.length, 0);
+  assert.strictEqual(r1.classes[A].a, true);
+  const r2 = await diffSync(st, sync("s2", T0 + HOUR, { assignments: [asg("x", { tab: "Past due" }), asg("y", { tab: "Completed" }), asg("z")] }));
+  assert.deepStrictEqual(r2.events.map((e) => e.type), ["new_assignment"]);
+});
+
+test("diff: baseline gates only change events — reminders, /today and /plan see baseline items", async () => {
+  const st = newState();
+  const now = T0;
+  const r = apply(st, await diffSync(st, sync("s1", now, { covered: [{ class: A, tabs: ["Upcoming"] }],
+    assignments: [asg("soon", { dueIso: new Date(now + 2 * HOUR).toISOString() })] })));
+  assert.strictEqual(r.events.length, 0);
+  assert.strictEqual(r.classes[A].a, false, "still in baseline");
+  const items = [...st.items.values()];
+  assert.deepStrictEqual(planReminders(items, new Set(), now, { tz: TZ }).map((x) => x.itemKey), [assignmentKey(asg("soon"))]);
+  assert.strictEqual(agenda.selectToday(items, now, TZ).due.length, 1);
+  assert.strictEqual(agenda.buildPlan(items, now, TZ).ranked.length, 1);
+});
+
+test("diff: due_date_changed never fires for Completed items (the stored date still updates)", async () => {
+  const st = await baselined();
+  apply(st, await diffSync(st, sync("s2", T0 + HOUR, { assignments: [asg("g1", { tab: "Completed" }), asg("g2")] })));
+  const r = await diffSync(st, sync("s3", T0 + 2 * HOUR, { assignments: [asg("g1", { tab: "Completed", dueIso: "2026-10-20T17:59:00.000Z" }), asg("g2")] }));
+  assert.strictEqual(r.events.length, 0);
+  assert.strictEqual(r.upserts.find((u) => u.key === assignmentKey(asg("g1"))).dueIso, "2026-10-20T17:59:00.000Z");
+});
+
+test("diff: Dec 31 → Jan 1 with year-less Completed, Past due and Upcoming items → zero events", async () => {
+  const st = newState();
+  const items = [
+    { class: A, assignmentId: "c", title: "Done lab", tab: "Completed", dueRaw: "Dec 30th Due at 11:59 PM" },
+    { class: A, assignmentId: "p", title: "Late lab", tab: "Past due",  dueRaw: "Dec 29th Due at 11:59 PM" },
+    { class: A, assignmentId: "u", title: "Next lab", tab: "Upcoming",  dueRaw: "Jan 3rd Due at 9:00 AM" },
+  ];
+  const dec31 = T("2026-12-31T06:00:00Z"); // 12:00 Dhaka
+  const jan1  = T("2027-01-01T06:00:00Z");
+  const jan2  = T("2027-01-02T06:00:00Z");
+  const r1 = apply(st, await diffSync(st, sync("y1", dec31, { assignments: items })));
+  const due = Object.fromEntries(r1.upserts.map((u) => [u.title, u.dueIso]));
+  assert.deepStrictEqual(due, { "Done lab": "2026-12-30T17:59:00.000Z", "Late lab": "2026-12-29T17:59:00.000Z", "Next lab": "2027-01-03T03:00:00.000Z" });
+  for (const [id, at] of [["y2", jan1], ["y3", jan2]]) {
+    const r = apply(st, await diffSync(st, sync(id, at, { assignments: items })));
+    assert.strictEqual(r.events.length, 0, id);
+    assert.strictEqual(r.upserts.length, 0, `${id}: dates are stable across New Year`);
+  }
+});
+
+test("diff: /done is sticky across syncs and cleared only when Teams shows Completed", async () => {
   const st = await baselined();
   const k = assignmentKey(asg("g1"));
-  st.items.set(k, { ...st.items.get(k), doneAt: T0 + 10 * 60e3 });
-  const r = await diffSync(st, sync("s2", T0 + HOUR, { assignments: [asg("g1"), asg("g2")] }));
-  assert.strictEqual(r.upserts.find((u) => u.key === k).doneAt, null);
+  st.items.set(k, agenda.markDone(st.items.get(k), T0 + 10 * 60e3));
+  let r = apply(st, await diffSync(st, sync("s2", T0 + HOUR, { assignments: [asg("g1"), asg("g2")] })));
+  assert.strictEqual(r.upserts.length, 0);
+  assert.strictEqual(st.items.get(k).doneAt, T0 + 10 * 60e3);
+  r = apply(st, await diffSync(st, sync("s3", T0 + 2 * HOUR, { assignments: [asg("g1", { tab: "Completed" }), asg("g2")] })));
+  assert.strictEqual(st.items.get(k).doneAt, null);
 });
 
 // ── reminders ─────────────────────────────────────────────────────────────
@@ -390,4 +459,103 @@ test("format: high-priority tags are real classify() outputs", () => {
     assert.strictEqual(fmt.eventPriority({ type: "tagged_post", payload: { tag: classify(text) } }), "high", text);
   }
   assert.strictEqual(fmt.eventPriority({ type: "tagged_post", payload: { tag: classify("grades") } }), "normal");
+});
+
+// ── /done is sticky until the due date passes; /undone ────────────────────
+
+test("agenda: a /done item is hidden and not reminded until its due date passes; /undone restores it", () => {
+  const it = agenda.markDone(item("x", NOW + 2 * HOUR), NOW - HOUR);
+  assert.deepStrictEqual(planReminders([it], new Set(), NOW, { tz: TZ }), []);
+  assert.strictEqual(agenda.selectToday([it], NOW, TZ).due.length, 0);
+  assert.deepStrictEqual(agenda.selectDone([it], NOW).map((r) => r.key), ["x"]);
+  const later = NOW + 3 * HOUR; // due passed, Teams never showed Completed
+  assert.deepStrictEqual(agenda.selectToday([it], later, TZ).overdue.map((r) => r.key), ["x"]);
+  assert.deepStrictEqual(agenda.selectDone([it], later), []);
+  const back = agenda.markUndone(it);
+  assert.strictEqual(back.doneAt, null);
+  assert.strictEqual(planReminders([back], new Set(), NOW, { tz: TZ }).length, 1);
+  const undated = agenda.markDone({ ...item("u", 0), dueIso: null }, NOW);
+  assert.strictEqual(agenda.selectDone([undated], NOW + 365 * DAY).length, 1, "no due date: holds until Completed");
+});
+
+test("dates: Completed year-less dates take the nearest year across New Year", () => {
+  assert.strictEqual(resolveDueIso({ tab: "Completed", dueRaw: "Dec 30th Due at 11:59 PM" }, T("2027-01-02T06:00:00Z"), TZ), "2026-12-30T17:59:00.000Z");
+  assert.strictEqual(resolveDueIso({ tab: "Completed", dueRaw: "Jan 3rd Due at 9:00 AM" }, T("2026-12-31T06:00:00Z"), TZ), "2027-01-03T03:00:00.000Z");
+  assert.strictEqual(resolveDueIso({ tab: "Completed", dueRaw: "Oct 1st Due at 9:00 AM" }, T("2026-10-05T06:00:00Z"), TZ), "2026-10-01T03:00:00.000Z");
+});
+
+// ── hostile input, frozen input ───────────────────────────────────────────
+
+const { LONE_SURROGATE } = require("../selfhost/core/text");
+
+function deepFreeze(o) {
+  if (o && typeof o === "object" && !Object.isFrozen(o)) {
+    Object.freeze(o);
+    for (const v of Object.values(o)) deepFreeze(v);
+  }
+  return o;
+}
+
+const HOSTILE = [
+  "<script>alert(1)</script>",
+  `"'\`; DROP TABLE items; --`,
+  "a\u0000b\u0007c\u001bd",
+  "‮evil⁦ ​﻿",
+  "x".repeat(10 * 1024),
+  "বাংলা ক্লাস টেস্ট রবিবার 🧪📚👩🏽‍🎓",
+  `${"🙂".repeat(200)}`,
+  "\uD800 lone \uDC00 halves",
+];
+
+function assertPlain(s, label) {
+  assert.strictEqual(typeof s, "string", label);
+  assert.ok(!/[\u0000-\u0008\u000B-\u001F\u007F‪-‮⁦-⁩​﻿]/.test(s), `${label}: unsafe chars`);
+  assert.ok(!new RegExp(LONE_SURROGATE.source).test(s), `${label}: lone surrogate`);
+}
+
+test("hostile strings through diffSync and every formatter: no throw, plain text, bounded", async () => {
+  const st = newState();
+  const assignments = HOSTILE.map((h, i) => ({ class: A, assignmentId: `h${i}`, title: h, tab: "Upcoming", dueRaw: h, details: h }));
+  const posts = HOSTILE.map((h, i) => ({ class: A, id: `${i}`.padEnd(64, "a"), author: h, subject: h, body: `${h} quiz`, isBot: false }));
+  apply(st, await diffSync(st, sync("h1", T0, { assignments: [], posts: [] })));
+  const r = await diffSync(st, sync("h2", T0 + HOUR, { assignments, posts }));
+  assert.ok(r.events.length > 0);
+  for (const u of r.upserts) {
+    assertPlain(u.title, "stored title");
+    assert.ok(u.title.length <= 300);
+    if (u.body !== undefined) { assertPlain(u.body, "stored body"); assert.ok(u.body.length <= 2000); }
+  }
+  assert.ok(r.upserts.some((u) => u.title === "<script>alert(1)</script>"), "kept literally, never interpreted");
+  assert.ok(r.upserts.some((u) => u.title.startsWith("বাংলা")), "Bangla preserved");
+  const ctx = { now: T0 + HOUR, tz: TZ, lastSyncAt: T0 };
+  for (const ev of r.events) {
+    const text = fmt.formatEvent(ev, ctx);
+    assertPlain(text, ev.type);
+    assert.ok(text.length < 1200, `${ev.type} length ${text.length}`);
+  }
+  const items = r.upserts.filter((u) => u.kind === "a").map((u) => ({ ...u, dueIso: new Date(T0 + 5 * HOUR).toISOString() }));
+  for (const out of [
+    fmt.formatToday(agenda.selectToday(items, ctx.now, TZ), ctx),
+    fmt.formatWeek(agenda.selectWeek(items, ctx.now, TZ), ctx),
+    fmt.formatDue(agenda.selectDue(items, ctx.now), ctx, 25),
+    fmt.formatPlan(agenda.buildPlan(items, ctx.now, TZ), ctx),
+    fmt.formatDigest(agenda.selectWeek(items, ctx.now, TZ), ctx),
+    ...items.map((i) => fmt.formatReminder({ ...i, slot: "3h", kind: "3h" }, ctx)),
+  ]) assertPlain(out, "list");
+  for (const h of HOSTILE) assertPlain(fmt.clean(h), "clean");
+});
+
+test("diffSync does not mutate deep-frozen inputs", async () => {
+  const st = await baselined();
+  const prevItems = new Map([...st.items].map(([k, v]) => [k, deepFreeze({ ...v })]));
+  const prev = deepFreeze({ classes: JSON.parse(JSON.stringify(st.classes)), items: prevItems });
+  const before = JSON.stringify([prev.classes, [...prev.items]]);
+  const s = deepFreeze(sync("f2", T0 + 2 * HOUR, {
+    assignments: [asg("g1", { dueIso: "2026-10-12T17:59:00.000Z", tab: "Past due" }), asg("g3")],
+    posts: [post("p9", { body: "Exam on Friday" })],
+  }));
+  const r = await diffSync(prev, s);
+  assert.ok(r.events.length >= 3);
+  assert.strictEqual(JSON.stringify([prev.classes, [...prev.items]]), before);
+  assert.strictEqual(prev.items.size, prevItems.size);
 });

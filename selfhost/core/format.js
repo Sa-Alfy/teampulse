@@ -11,18 +11,16 @@
 const { PRODUCT_NAME, HOUR, DAY, MAX_TEXT } = require("./config");
 const { localParts } = require("./time");
 const { shortClassName } = require("../../extension/core/digest-utils");
+const { stripUnsafe, safeSlice } = require("./text");
 
 // Exact classify() outputs that interrupt quiet hours.
 const HIGH_TAGS = new Set(["🧪 CT/Quiz", "📝 Exam", "🔄 Reschedule", "❌ Cancelled"]);
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-// C0/C1 controls except \n, plus bidi overrides/isolates and zero-width chars.
-const UNSAFE = /[\u0000-\u0009\u000B-\u001F\u007F-\u009F​-‏‪-‮⁦-⁩﻿]/g;
-
 function clean(text, max = MAX_TEXT) {
-  const t = String(text ?? "").replace(UNSAFE, "").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
-  return t.length > max ? `${t.slice(0, max - 1)}…` : t;
+  const t = stripUnsafe(text).replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+  return t.length > max ? `${safeSlice(t, max - 1)}…` : t;
 }
 
 function ago(ms) {

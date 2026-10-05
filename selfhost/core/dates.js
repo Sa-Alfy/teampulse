@@ -7,6 +7,8 @@
  * year rule for dates written without a year ("Jan 5th Due at 9:00 AM"):
  *   - Upcoming: a date more than 60 days before today rolls to next year.
  *   - Past due: a date after today rolls to last year.
+ *   - Completed (any other tab): the nearest of last / this / next year, like
+ *     the frame's inferDueDate when it knows no side.
  * Parsing reuses extractDate / extractTime (no new date regexes).
  */
 
@@ -79,6 +81,11 @@ function resolveDueIso(a, nowMs, tz) {
       const diff = daysBetween(today, day);
       if (a.tab === "Upcoming" && diff < -YEAR_ROLL_UPCOMING_DAYS) day = shiftYear(day, 1);
       else if (a.tab === "Past due" && diff > 0) day = shiftYear(day, -1);
+      else if (a.tab !== "Upcoming" && a.tab !== "Past due") {
+        for (const cand of [shiftYear(day, -1), shiftYear(day, 1)]) {
+          if (Math.abs(daysBetween(today, cand)) < Math.abs(daysBetween(today, day))) day = cand;
+        }
+      }
     }
   }
 
