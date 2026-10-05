@@ -1,7 +1,7 @@
 // One-off deploy-test key. Never prints the key.
-//   node scripts/test-key.mjs           → writes .wrangler/deploy-test/key.txt (the key, local only)
+//   node scripts/deploy-key.mjs           → writes .wrangler/deploy-test/key.txt (the key, local only)
 //                                         and .wrangler/deploy-test/key.sql (only its sha256 hash)
-//   node scripts/test-key.mjs --delete  → deletes both files
+//   node scripts/deploy-key.mjs --delete  → deletes both files
 // .wrangler/ is git-ignored.
 
 import fs from "node:fs";

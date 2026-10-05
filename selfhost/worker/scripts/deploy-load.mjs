@@ -1,7 +1,7 @@
 // Deploy test: sends synthetic payloads to a deployed Worker and prints only
 // status codes, counts and client-side round-trip times (never the key).
-//   node scripts/load-test.mjs https://<worker>.<subdomain>.workers.dev
-// Needs .wrangler/deploy-test/key.txt from scripts/test-key.mjs.
+//   node scripts/deploy-load.mjs https://<worker>.<subdomain>.workers.dev
+// Needs .wrangler/deploy-test/key.txt from scripts/deploy-key.mjs.
 // All data is synthetic: classes "Load Test Class R" (realistic) and
 // "Load Test Class W" (worst case), syncIds "loadtest-…".
 
@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 
 const base = (process.argv[2] || "").replace(/\/+$/, "");
 if (!/^https:\/\/[A-Za-z0-9.-]+(:\d{2,5})?$/.test(base)) {
-  console.error("usage: node scripts/load-test.mjs https://<worker>.<subdomain>.workers.dev");
+  console.error("usage: node scripts/deploy-load.mjs https://<worker>.<subdomain>.workers.dev");
   process.exit(2);
 }
 const keyFile = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", ".wrangler", "deploy-test", "key.txt");
