@@ -64,11 +64,13 @@ function arr(v, max, path) {
   return v;
 }
 
-function assignment(a, i, tabs) {
+function assignment(a, i) {
   const p = `assignments[${i}]`;
   if (!isObj(a)) throw new Invalid(`type:${p}`);
+  // `tabs` (top level) lists the tabs captured in full — it drives removal and the
+  // baseline only. A card may come from any tab.
   const tab = str(a.tab, LIMITS.SHORT, `${p}.tab`, { required: true });
-  if (!tabs.includes(tab)) throw new Invalid(`tab_not_captured:${p}.tab`);
+  if (!ASSIGNMENT_TABS.includes(tab)) throw new Invalid(`format:${p}.tab`);
   return {
     assignmentId: str(a.assignmentId, LIMITS.SHORT, `${p}.assignmentId`, { re: GUID }),
     title: str(a.title, LIMITS.TITLE, `${p}.title`, { required: true }),
@@ -110,7 +112,7 @@ function validateIngest(body) {
     });
     if (new Set(tabs).size !== tabs.length) throw new Invalid("duplicate:tabs");
     const postsCaptured = bool(body.postsCaptured, "postsCaptured", false);
-    const assignments = arr(body.assignments, LIMITS.ASSIGNMENTS, "assignments").map((a, i) => assignment(a, i, tabs));
+    const assignments = arr(body.assignments, LIMITS.ASSIGNMENTS, "assignments").map((a, i) => assignment(a, i));
     const posts = arr(body.posts, LIMITS.POSTS, "posts").map(post);
     return { ok: true, value: { syncId, class: cls, tabs, postsCaptured, assignments, posts } };
   } catch (e) {

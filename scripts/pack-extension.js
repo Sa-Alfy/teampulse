@@ -117,4 +117,6 @@ function main() {
   for (const e of entries) console.log(`  ${String(e.data.length).padStart(7)}  ${e.name}`);
 }
 
-main();
+if (require.main === module) main();
+
+module.exports = { walk, buildZip, EXCLUDE };

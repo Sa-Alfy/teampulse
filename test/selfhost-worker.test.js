@@ -122,7 +122,7 @@ test("worker: 400 with a fixed error code, never echoing input", async () => {
     [{ ...payload(), syncId: "x" }, "format:syncId"],
     [{ ...payload(), class: "" }, "empty:class"],
     [{ ...payload(), tabs: ["Upcoming", "Nope"] }, "format:tabs[1]"],
-    [{ ...payload(), tabs: ["Upcoming"] }, "tab_not_captured:assignments[1].tab"],
+    [{ ...payload(), assignments: [{ title: "a", tab: "Done" }] }, "format:assignments[0].tab"],
     [{ ...payload(), assignments: [{ title: hostile.repeat(100), tab: "Upcoming" }] }, "too_long:assignments[0].title"],
     [{ ...payload(), assignments: Array.from({ length: 301 }, () => ({ title: "a", tab: "Upcoming" })) }, "too_many:assignments"],
     [{ ...payload(), posts: [{ id: hostile }] }, "format:posts[0].id"],

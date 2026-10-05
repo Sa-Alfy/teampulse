@@ -2,7 +2,7 @@
 
 Your own free Cloudflare Worker sends you Telegram alerts when a due date moves, reminds you 24 h and 3 h before unsubmitted work (even with your browser closed), answers `/today` `/week` `/due` `/plan`, and gives you a private calendar feed. Only you hold the data. The server never logs into Teams; the browser extension sends what it sees.
 
-**Status:** built and tested with automated tests; the full flow on a real phone has **not been verified yet**, and the "about 10 minutes" target is not measured yet. The extension's Connect build (step 6) is not released yet.
+**Status:** built and tested with automated tests. Verified live: setup, Telegram pairing, `/doctor`, the reminder timer. Not verified live yet: the Connect build pushing real Teams data, alerts, reminders, calendar import; the "about 10 minutes" target is not measured.
 
 **You need:** a Telegram account, a free Cloudflare account, and [Node.js 22+](https://nodejs.org) (for the commands below). Nothing here asks for a payment method; if Cloudflare does, stop.
 
@@ -46,7 +46,7 @@ Lost the pairing code? Open `/setup` again and use your extension key to get a n
 
 ## 6. Connect your data
 - **Calendar:** Google Calendar → Other calendars → **From URL** → paste the calendar URL. (Google refreshes subscribed calendars on its own schedule, often several hours.)
-- **Extension:** the self-host "Connect" build will take the extension key (coming next; not released yet).
+- **Extension (self-host build):** in the repo root run `npm run pack:selfhost`, then in Chrome open `chrome://extensions`, turn on Developer mode, **Load unpacked** → `dist/selfhost-extension`. Open its **Details → Extension options** (the Connect page), paste your server URL and extension key, click **Connect** and allow access to that one server. From then on every sync is sent to your server (the first one is a baseline: no alerts, only reminders). The store extension can stay installed; it never sends anything.
 
 ## Day to day
 - `/today`, `/week`, `/due`, `/plan`, `/done <n>`, `/undone`, `/digest 07:30` or `/digest off`, `/doctor`.

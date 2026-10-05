@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TeamsPulse Connect</title>
+<style>
+  body { font: 15px/1.5 system-ui, sans-serif; max-width: 36rem; margin: 2rem auto; padding: 0 1rem; color: #1b1b1b; background: #fff; }
+  label { display: block; margin-top: 1rem; font-weight: 600; }
+  input { width: 100%; padding: .5rem; box-sizing: border-box; font: 14px ui-monospace, monospace; }
+  button { margin: 1rem .5rem 0 0; padding: .5rem 1rem; }
+  #status { margin-top: 1.25rem; padding: .75rem; border-radius: 6px; background: #f2f2f2; white-space: pre-line; }
+  .bad { color: #b91c1c; } .good { color: #15803d; }
+  @media (prefers-color-scheme: dark) { body { background: #151515; color: #eee; } #status { background: #262626; } }
+</style>
+</head>
+<body>
+<h1>Connect to your server</h1>
+<p>Sends your synced assignments and announcements to <strong>your own</strong> TeamsPulse server after each sync. Nothing else is sent, and only to the address below.</p>
+<label for="url">Server URL</label>
+<input id="url" placeholder="https://teamspulse.yourname.workers.dev" autocomplete="off">
+<label for="key">Extension key (from the setup page, starts with tp_)</label>
+<input id="key" type="password" autocomplete="off">
+<button id="connect">Connect</button><button id="push">Push now</button><button id="disconnect">Disconnect</button>
+<div id="status">Not connected.</div>
+<script src="selfhost/push-core.js"></script>
+<script src="selfhost/connect-page.js"></script>
+</body>
+</html>
