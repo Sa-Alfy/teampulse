@@ -1,13 +1,13 @@
 # Changelog
 
-## 0.9.0 (2026-10-05, pre-release): self-host server + Connect build
+## 0.9.0 (2026-10-05, release): self-host server + Connect build
 
 The store extension is unchanged (still 0.7.3, still makes no network requests). 0.9.0 is the **self-host build**: `teamspulse-selfhost-0.9.0.zip`.
 
 - **Your own server** (Cloudflare Workers + D1, free plan): change alerts in Telegram (new assignment, moved due date, submitted, removed, new / tagged posts), reminders 24 h and 3 h before unsubmitted work, a daily digest, commands `/today` `/week` `/due` `/plan` `/done` `/undone` `/digest` `/doctor` `/rotatekey` `/rotatecal` `/deleteall`, and a secret `.ics` calendar feed. Setup: [`docs/selfhost-guide.md`](docs/selfhost-guide.md).
 - **Connect build** of the extension: same features as the store build, plus a server bar in the popup (status, **Push now**, **Connect** / **Settings**) and a Connect page. After each sync it sends your assignments and new posts to your server — only to the `*.workers.dev` address you enter, only with the permission you grant for it, without cookies.
 - Security: the server never logs into Teams; `/setup` can be claimed only with your bot token; keys and calendar tokens are stored as hashes; Telegram commands only from your paired chat; plain-text messages.
-- Tests: `node --test` 203 pass, 1 skipped; `npm run test:e2e` 5/5. Verified live by the owner: setup, Telegram pairing, `/doctor`, cron heartbeat, pushes arriving from the Connect build. **Not yet verified live:** change alerts and reminders on real Teams changes, calendar import, the popup server bar.
+- Tests: `node --test` 203 pass, 1 skipped; `npm run test:e2e` 5/5. Verified live by the owner: setup, Telegram pairing, `/doctor`, cron heartbeat, pushes arriving from the Connect build. Owner confirmed the popup server bar (2026-10-05). **Not yet verified live:** change alerts and reminders on real Teams changes, calendar import.
 
 ## 0.7.3 (2026-10-03, release): logo
 
