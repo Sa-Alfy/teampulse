@@ -5,7 +5,7 @@ import validateMod from "../../core/validate.js";
 import authMod from "../../core/auth.js";
 import { json, error, log, readCapped } from "./http.js";
 import { getSettings, prefs, loadPrev, writeStatements } from "./store.js";
-import { flushOutbox } from "./telegram.js";
+import { flushOutbox, onKeyRotated } from "./telegram.js";
 
 // A few events go out right away; bigger batches wait for the 5-minute cron (S4)
 // so one ingest call never formats and sends a large outbox inside its CPU budget.
@@ -25,6 +25,7 @@ const keyCache = new WeakMap();
 export function invalidateKeyCache(db) {
   keyCache.delete(db);
 }
+onKeyRotated(invalidateKeyCache);
 
 async function storedKeyHash(db, now) {
   const hit = keyCache.get(db);

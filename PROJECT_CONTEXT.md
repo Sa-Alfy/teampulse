@@ -474,16 +474,19 @@ Built on `feat/selfhost-v1` (2026-10-05), tested with a fake D1 and a fake Teleg
   - Then `flushOutbox` sends everything due (including events left over from ingest).
 
 **Phase 5: Setup and health**
-- [ ] `/setup`: auto-generated key shown once as a single pairing code
-- [ ] `/doctor`: green/red checks (server, DB, last sync, Telegram link) with a fix hint per red item
-- [ ] One-click or one-command deploy; 6-step student guide
+Built on `feat/selfhost-v1` (2026-10-05), tested with a fake D1 and fake Telegram (`test/selfhost-setup.test.js`, 8 tests incl. one end-to-end run). **Not run on the deployed Worker or a real phone yet.**
+- [x] `GET/POST /setup`: claim requires the bot token (compared as sha256 with the `TELEGRAM_BOT_TOKEN` secret, never stored); D1 fixed-window counter, 5 attempts / 15 min (global, so a stranger can delay but not claim); atomic claim (plain `INSERT` of `claimed` — a second claim fails the batch → 409); then `setWebhook` (`secret_token`, `allowed_updates: ["message"]`); if Telegram refuses, the claim is rolled back (502). Shows the ingest key, the `/start` code and the calendar URL **once**; only hashes stored. No scripts, strict CSP, `no-store`. After claiming, `/setup` offers only `POST /setup/pair` (new pairing code, needs the ingest key, refused once paired).
+- [x] `/doctor` (Telegram, paired chat): database, bot token secret, webhook (`getWebhookInfo`: URL set, no error in the last hour), last sync age (✅ < 24 h, ⚠️ < 72 h, ❌), cron heartbeat (`last_cron_at`, ✅ < 15 min), stuck/failed alerts, plus counts and settings. No secrets, no item text (test asserts it).
+- [x] `/rotatekey` (new ingest key in the reply; the old one fails at once in this isolate, within 60 s elsewhere), `/rotatecal` (new calendar URL; the old one returns 404 at once).
+- [x] `/deleteall`: asks for a 6-character confirmation code valid 5 min; deletes items, events, reminders_sent, syncs, classes and sync settings in one batch; keeps keys, calendar token and pairing. Full removal is in the guide (`wrangler delete`, `wrangler d1 delete`, `/deletebot`).
+- [x] 6-step student guide: `docs/selfhost-guide.md` (terminal path; the 10-minute target is **not measured**, and a Deploy-to-Cloudflare button is still unverified).
 
 **Phase 6: Extension "Connect" (self-host build)**
 - [ ] Settings: paste pairing code; delta push after each sync; last-push status
 - [ ] Decision pending: two builds (store build stays network-free, self-host build from GitHub releases) vs one build with an optional host permission. Default: **two builds**.
 
 **Phase 7: Interface extras**
-- [ ] `.ics` feed on a secret, revocable URL
+- [x] `.ics` feed on a secret, revocable URL (moved into v1/S5): `GET /cal/<token>.ics`, 192-bit token stored as a hash, constant-time compare, 404 on mismatch; open assignments via `items_open_due`; RFC 5545 escaping, folding and stable UIDs from `extension/core/ics.js` (UID = Teams GUID). Import into Google Calendar **not verified**.
 - [ ] Full-text search over stored posts
 - [ ] Dashboard: filters, week-by-week workload view
 

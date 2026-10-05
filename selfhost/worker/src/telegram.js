@@ -102,6 +102,11 @@ export async function webhook(request, env, now) {
   }
   if (!c) return answer(chat.id, HELP);
   if (c.cmd === "start") return answer(chat.id, `Already paired.\n\n${HELP}`);
+  if (ADMIN[c.cmd]) {
+    const text = await ADMIN[c.cmd]({ c, db, env, s, now, origin: new URL(request.url).origin });
+    log({ route: "telegram", cmd: c.cmd });
+    return answer(chat.id, text);
+  }
 
   const { tz } = prefs(s);
   const needsItems = ["today", "week", "due", "plan", "done", "undone"].includes(c.cmd);
@@ -120,19 +125,88 @@ export async function webhook(request, env, now) {
   return answer(chat.id, out.text);
 }
 
-async function sendMessage(token, chatId, text) {
+// ── admin commands (paired chat only): /doctor /rotatekey /rotatecal /deleteall ──
+
+const DELETE_TTL_MS = 5 * 60e3;
+const DATA_TABLES = ["items", "events", "reminders_sent", "syncs", "classes"];
+const DATA_SETTINGS = ["last_sync_at", "list_due", "list_undone", "last_digest_day", "delete_confirm", "delete_expires"];
+
+const ADMIN = {
+  async doctor({ db, env, s, now }) {
+    const [counts] = await db.batch([db.prepare(
+      "SELECT (SELECT COUNT(*) FROM items WHERE kind = 'a' AND removed_at IS NULL AND submitted = 0) AS open, " +
+      "(SELECT COUNT(*) FROM events WHERE sent_at IS NULL AND not_before <= ?) AS waiting, " +
+      "(SELECT COUNT(*) FROM events WHERE sent_at IS NULL AND attempts >= ?) AS failed"
+    ).bind(now - 30 * 60e3, MAX_ATTEMPTS)]);
+    const c = counts.results[0];
+    const extra = await getSettings(db, ["webhook_set", "last_cron_at", "digest_time", "quiet"]);
+    const info = env.TELEGRAM_BOT_TOKEN ? await tgApi(env.TELEGRAM_BOT_TOKEN, "getWebhookInfo", {}) : { ok: false };
+    const hookErr = info.ok && info.result && info.result.last_error_date && now / 1000 - info.result.last_error_date < 3600;
+    return botMod.formatDoctor({
+      now, tz: prefs(s).tz,
+      botToken: !!env.TELEGRAM_BOT_TOKEN,
+      webhook: extra.webhook_set === "1" && info.ok && !!(info.result && info.result.url) && !hookErr,
+      lastSyncAt: s.last_sync_at ? Number(s.last_sync_at) : null,
+      lastCronAt: extra.last_cron_at ? Number(extra.last_cron_at) : null,
+      open: c.open, waiting: c.waiting, failed: c.failed,
+      digest: extra.digest_time, quiet: extra.quiet,
+    });
+  },
+
+  async rotatekey({ db, now }) {
+    const key = `tp_${authMod.randomSecret(32)}`;
+    await db.batch([setStmt(db, "ingest_key_hash", await hashKey(key))]);
+    invalidate(db);
+    log({ route: "telegram", rotated: "key", at: now });
+    return `New extension key (paste it into the extension's Connect settings):\n\n${key}\n\nThe old key stops working within 1 minute. Delete this message after copying.`;
+  },
+
+  async rotatecal({ db, origin }) {
+    const token = authMod.randomSecret(24);
+    await db.batch([setStmt(db, "ics_hash", await hashKey(token))]);
+    return `New calendar URL (the old one stops working now):\n\n${origin}/cal/${token}.ics\n\nIn Google Calendar, remove the old calendar and add this URL under Other calendars → From URL.`;
+  },
+
+  async deleteall({ c, db, now }) {
+    const pending = await getSettings(db, ["delete_confirm", "delete_expires"]);
+    if (c.arg && pending.delete_confirm && Number(pending.delete_expires) > now && c.arg.toUpperCase() === pending.delete_confirm) {
+      const stmts = DATA_TABLES.map((t) => db.prepare(`DELETE FROM ${t}`));
+      stmts.push(delStmt(db, DATA_SETTINGS));
+      const res = await db.batch(stmts);
+      const n = res.slice(0, DATA_TABLES.length).reduce((sum, r) => sum + ((r.meta && r.meta.changes) || 0), 0);
+      log({ route: "telegram", deleted: n });
+      return `Deleted ${n} stored rows (assignments, posts, alerts, reminders, sync history).\nYour keys, calendar URL and this Telegram pairing are kept. The extension uploads again on its next sync — disconnect it first if you want it to stop.`;
+    }
+    const code = botMod.makePairCode(globalThis.crypto.getRandomValues(new Uint8Array(10))).slice(0, 6);
+    await db.batch([setStmt(db, "delete_confirm", code), setStmt(db, "delete_expires", now + DELETE_TTL_MS)]);
+    return `This deletes ALL assignments, posts, alerts and reminders stored on your server. It cannot be undone.\n\nTo confirm, send within 5 minutes:\n/deleteall ${code}`;
+  },
+};
+
+let invalidate = () => {};
+/** routes.js registers its key-cache invalidation here (avoids an import cycle). */
+export function onKeyRotated(fn) {
+  invalidate = fn;
+}
+
+/** Call a Bot API method. Returns { ok, status, result } — never throws, never logs the token. */
+export async function tgApi(token, method, body) {
   try {
-    const res = await fetchImpl(`https://api.telegram.org/bot${token}/sendMessage`, {
+    const res = await fetchImpl(`https://api.telegram.org/bot${token}/${method}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ chat_id: Number(chatId), text, link_preview_options: { is_disabled: true } }),
+      body: JSON.stringify(body || {}),
       signal: AbortSignal.timeout(10e3),
     });
     const data = await res.json().catch(() => ({}));
-    return { ok: res.ok && data.ok === true, status: res.status };
+    return { ok: res.ok && data.ok === true, status: res.status, result: data.result };
   } catch (e) {
     return { ok: false, status: 0, err: e && e.name ? String(e.name) : "Error" };
   }
+}
+
+function sendMessage(token, chatId, text) {
+  return tgApi(token, "sendMessage", { chat_id: Number(chatId), text, link_preview_options: { is_disabled: true } });
 }
 
 /**

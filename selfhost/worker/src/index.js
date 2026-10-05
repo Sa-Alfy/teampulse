@@ -4,19 +4,23 @@ import { error, log } from "./http.js";
 import { ingest, events, health } from "./routes.js";
 import { webhook } from "./telegram.js";
 import { runCron } from "./cron.js";
+import { setupPage, setupSubmit, pairSubmit } from "./setup.js";
+import { calendar, isCalendarPath } from "./calendar.js";
 
 const ROUTES = {
   "/api/ingest": { POST: ingest },
   "/api/events": { GET: events },
   "/health": { GET: health },
   "/telegram/webhook": { POST: webhook },
+  "/setup": { GET: setupPage, POST: setupSubmit },
+  "/setup/pair": { POST: pairSubmit },
 };
 
 /** Exported for tests: `now` is a parameter, never read inside the handlers. */
 export async function handle(request, env, now, ctx) {
   const url = new URL(request.url);
   if (url.protocol !== "https:") return error(403, "https_required");
-  const route = ROUTES[url.pathname];
+  const route = ROUTES[url.pathname] || (isCalendarPath(url.pathname) ? { GET: calendar } : null);
   if (!route) return error(404, "not_found");
   const fn = route[request.method];
   if (!fn) return error(405, "method_not_allowed");

@@ -89,7 +89,7 @@ test("cron: 3h and 24h reminders are sent once; events and reminders_sent share 
   assert.ok(!/a:far|a:sub|a:done/.test(calls[0].text));
   assert.match(calls[0].text, /Last synced 1 h ago$/);
   const writeBatches = env.DB.calls.batches.filter((b) => b.includes("write"));
-  assert.ok(writeBatches.some((b) => b.length === 4), "2 reminders × (reminders_sent + event) in one batch");
+  assert.ok(writeBatches.some((b) => b.length === 5), "2 reminders × (reminders_sent + event) + heartbeat in one batch");
   assert.strictEqual(rows(env, "SELECT * FROM reminders_sent").length, 2);
 
   const again = await cron.runCron(env, NOON + 5 * 60e3);

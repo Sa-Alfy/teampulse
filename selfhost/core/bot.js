@@ -34,7 +34,32 @@ const HELP = [
   "/done <n> — mark item n from /due as done",
   "/undone — list items marked done; /undone <n> to restore",
   "/digest — daily digest time; /digest 07:30 or /digest off",
+  "/doctor — what works and what is broken",
+  "/rotatekey — new extension key · /rotatecal — new calendar URL",
+  "/deleteall — delete all stored data (asks to confirm)",
 ].join("\n");
+
+const H = 3600e3;
+
+/** /doctor text: one line per check, a fix hint for each problem. No secrets, no content. */
+function formatDoctor(d) {
+  const lines = [`${PRODUCT_NAME} doctor`];
+  const row = (ok, label, hint) => lines.push(ok === true ? `✅ ${label}` : ok === "warn" ? `⚠️ ${label} — ${hint}` : `❌ ${label} — ${hint}`);
+  row(true, "Database");
+  row(d.botToken, "Bot token secret", "add TELEGRAM_BOT_TOKEN in the Worker's settings");
+  row(d.webhook, "Telegram webhook", "run setup again or check the bot token");
+  const age = d.lastSyncAt ? d.now - d.lastSyncAt : Infinity;
+  row(age < 24 * H ? true : age < 72 * H ? "warn" : false,
+    d.lastSyncAt ? `Last sync ${fmt.ago(age)}` : "No sync yet",
+    "open Teams in your browser and click Sync in the extension");
+  const cronAge = d.lastCronAt ? d.now - d.lastCronAt : Infinity;
+  row(cronAge < 15 * 60e3, d.lastCronAt ? `Reminder timer ran ${fmt.ago(cronAge)}` : "Reminder timer has not run",
+    "check Triggers in the Worker's settings (expects */5 * * * *)");
+  row(d.failed === 0 && d.waiting === 0 ? true : d.failed > 0 ? false : "warn",
+    `Alerts waiting: ${d.waiting}, failed: ${d.failed}`, "Telegram unreachable or the bot is blocked; unblock it and wait 5 minutes");
+  lines.push("", `Open assignments: ${d.open} · Timezone: ${d.tz} · Digest: ${digestSetting(d.digest)} · Quiet hours: ${d.quiet === "off" ? "off" : "on"}`);
+  return lines.join("\n");
+}
 
 function parseCommand(text) {
   if (typeof text !== "string") return null;
@@ -189,6 +214,6 @@ function buildAlertMessages(rows, ctx) {
 }
 
 module.exports = {
-  parseCommand, reply, HELP, makePairCode, normalizePairCode, pairingOpen, buildAlertMessages,
+  parseCommand, reply, HELP, formatDoctor, makePairCode, normalizePairCode, pairingOpen, buildAlertMessages,
   PAIR_TTL_MS, PAIR_MAX_FAILS, PAIR_LEN, LIST_TTL_MS, ALERT_MAX,
 };

@@ -37,8 +37,10 @@ export async function runCron(env, now) {
     db.prepare(REMINDER_CANDIDATES_SQL).bind(now, now + 24 * HOUR),
   ]);
   const s = Object.fromEntries(settingsRes.results.map((r) => [r.k, r.v]));
+  const heartbeat = db.prepare("INSERT INTO settings (k, v) VALUES ('last_cron_at', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").bind(String(now));
   if (!s.chat_id) {
     // Unpaired: nothing would be delivered, and queued reminders would go out stale later.
+    await db.batch([heartbeat]);
     log({ route: "cron", paired: false });
     return { reminders: 0, digest: false, sent: 0 };
   }
@@ -73,7 +75,8 @@ export async function runCron(env, now) {
     writes.push(eventRow(db, await sha256Hex(`digest\0${dg.day}`), "digest", null, now, { text, day: dg.day }));
     writes.push(db.prepare("INSERT INTO settings (k, v) VALUES ('last_digest_day', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").bind(dg.day));
   }
-  if (writes.length) await db.batch(writes);
+  writes.push(heartbeat); // /doctor: "reminder timer ran N min ago"
+  await db.batch(writes);
 
   const out = await flushOutbox(env, now);
   log({ route: "cron", candidates: candidates.length, reminders: planned.length, digest: dg.due, sent: out.sent, failed: out.failed });
