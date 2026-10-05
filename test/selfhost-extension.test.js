@@ -16,7 +16,7 @@ const vm     = require("vm");
 
 const ROOT = path.join(__dirname, "..");
 const EXT = path.join(ROOT, "extension");
-const { transformManifest, build } = require("../scripts/pack-selfhost-extension");
+const { transformManifest, build, SELFHOST_VERSION } = require("../scripts/pack-selfhost-extension");
 const push = require("../selfhost/extension/push-core");
 const { validateIngest } = require("../selfhost/core/validate");
 const { sha256Hex } = require("../extension/core/fingerprint");
@@ -54,10 +54,12 @@ test("store build: the store zip's file list contains none of the self-host file
 
 // ── self-host manifest and build ──────────────────────────────────────────
 
-test("self-host manifest: only name, worker, optional workers.dev access, CSP connect-src and options page change", () => {
+test("self-host manifest: only name, version, worker, optional workers.dev access, CSP connect-src and options page change", () => {
   const store = JSON.parse(fs.readFileSync(path.join(EXT, "manifest.json"), "utf8"));
   const m = transformManifest(store);
   assert.strictEqual(m.name, `${store.name} (self-host)`);
+  assert.strictEqual(m.version, SELFHOST_VERSION);
+  assert.match(SELFHOST_VERSION, /^\d+\.\d+\.\d+$/);
   assert.strictEqual(m.background.service_worker, "background-selfhost.js");
   assert.deepStrictEqual(m.optional_host_permissions, ["https://*.workers.dev/*"]);
   assert.strictEqual(m.host_permissions, undefined, "no host access until the student grants one server");
@@ -66,7 +68,7 @@ test("self-host manifest: only name, worker, optional workers.dev access, CSP co
   assert.strictEqual(m.content_security_policy.extension_pages,
     store.content_security_policy.extension_pages.replace("connect-src 'none'", "connect-src https://*.workers.dev"));
   const changed = Object.keys(m).filter((k) => JSON.stringify(m[k]) !== JSON.stringify(store[k])).sort();
-  assert.deepStrictEqual(changed, ["background", "content_security_policy", "name", "optional_host_permissions", "options_ui"]);
+  assert.deepStrictEqual(changed, ["background", "content_security_policy", "name", "optional_host_permissions", "options_ui", "version"]);
 });
 
 let outDir;
@@ -76,10 +78,15 @@ test.before(() => {
 });
 test.after(() => fs.rmSync(outDir, { recursive: true, force: true }));
 
-test("self-host build: every store file is copied unchanged and every referenced file exists", () => {
+test("self-host build: store files copied unchanged (popup.html: +1 script tag) and every referenced file exists", () => {
   const { walk } = require("../scripts/pack-extension");
+  const storePopup = fs.readFileSync(path.join(EXT, "popup.html"), "utf8");
+  const builtPopup = fs.readFileSync(path.join(outDir, "popup.html"), "utf8");
+  assert.strictEqual(builtPopup.replace(/\r?\n  <script src="selfhost\/popup-connect\.js"><\/script>/, ""), storePopup);
+  assert.ok(fs.existsSync(path.join(outDir, "selfhost", "popup-connect.js")));
+  assert.ok(!/innerHTML|insertAdjacentHTML|outerHTML/.test(fs.readFileSync(path.join(outDir, "selfhost", "popup-connect.js"), "utf8")));
   for (const f of walk(EXT)) {
-    if (f === "manifest.json") continue;
+    if (f === "manifest.json" || f === "popup.html") continue;
     assert.ok(fs.readFileSync(path.join(outDir, f)).equals(fs.readFileSync(path.join(EXT, f))), f);
   }
   const bg = fs.readFileSync(path.join(outDir, "background-selfhost.js"), "utf8");

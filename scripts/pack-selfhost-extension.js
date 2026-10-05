@@ -10,12 +10,13 @@
  * npm run pack:extension) is never modified.
  *
  * Manifest changes vs the store build (everything else is copied as is):
- *   - name + " (self-host)"
+ *   - name + " (self-host)", version SELFHOST_VERSION (the store build keeps its own)
  *   - background.service_worker → background-selfhost.js
  *   - optional_host_permissions: https://*.workers.dev/* (granted per server
  *     at runtime on the Connect page; no required host permission)
  *   - CSP connect-src 'none' → https://*.workers.dev
  *   - options_ui → connect.html
+ * popup.html gets one extra <script> (the server bar); no other store file changes.
  */
 
 "use strict";
@@ -33,12 +34,16 @@ const OVERLAY_FILES = {
   "selfhost/push-core.js": "push-core.js",
   "selfhost/connect-sw.js": "connect-sw.js",
   "selfhost/connect-page.js": "connect-page.js",
+  "selfhost/popup-connect.js": "popup-connect.js",
 };
+const SELFHOST_VERSION = "0.9.0";
+const POPUP_HOOK = '<script src="popup.js"></script>';
 const WORKERS_ORIGINS = "https://*.workers.dev/*";
 
 function transformManifest(store) {
   const m = JSON.parse(JSON.stringify(store));
   m.name = `${store.name} (self-host)`;
+  m.version = SELFHOST_VERSION;
   m.background = { ...store.background, service_worker: "background-selfhost.js" };
   m.optional_host_permissions = [WORKERS_ORIGINS];
   const csp = store.content_security_policy.extension_pages;
@@ -48,6 +53,12 @@ function transformManifest(store) {
   return m;
 }
 
+function patchPopup(html) {
+  if (!html.includes(POPUP_HOOK)) throw new Error("popup.html changed: popup.js script tag not found");
+  return html.replace(POPUP_HOOK, `${POPUP_HOOK}
+  <script src="selfhost/popup-connect.js"></script>`);
+}
+
 function build(outDir) {
   const store = JSON.parse(fs.readFileSync(path.join(EXT, "manifest.json"), "utf8"));
   const manifest = transformManifest(store);
@@ -55,7 +66,9 @@ function build(outDir) {
   const entries = [];
   for (const name of walk(EXT)) {
     if (name === "manifest.json") continue;
-    entries.push({ name, data: fs.readFileSync(path.join(EXT, name)) });
+    let data = fs.readFileSync(path.join(EXT, name));
+    if (name === "popup.html") data = Buffer.from(patchPopup(data.toString("utf8")));
+    entries.push({ name, data });
   }
   for (const [name, src] of Object.entries(OVERLAY_FILES)) {
     if (entries.some((e) => e.name === name)) throw new Error(`overlay would overwrite a store file: ${name}`);
@@ -82,4 +95,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { transformManifest, build, OVERLAY_FILES };
+module.exports = { transformManifest, build, patchPopup, OVERLAY_FILES, SELFHOST_VERSION };
