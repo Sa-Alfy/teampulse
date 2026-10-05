@@ -32,7 +32,7 @@ University students live inside Microsoft Teams, but finding what actually matte
 
 ## 💡 The Solution
 
-**TeamsPulse** reads the Teams pages you already have open in your own browser session, extracts structured assignment and announcement data, deduplicates across visits, and turns noisy chat feeds into an actionable briefing. It ships two ways: a standalone browser extension (recommended), and an optional self-hosted Playwright pipeline.
+**TeamsPulse** reads the Teams pages you already have open in your own browser session, extracts structured assignment and announcement data, deduplicates across visits, and turns noisy chat feeds into an actionable briefing. It ships three ways: a standalone browser extension (recommended, no setup), an optional **cloud self-host** (your own free Cloudflare server for Telegram alerts, reminders and a calendar feed, fed by the extension's Connect build), and the older Playwright pipeline.
 
 ### Standalone extension (default)
 
@@ -51,7 +51,24 @@ flowchart LR
 - CSP for extension pages: `connect-src 'none'` — the popup cannot make network requests.
 - Content scripts run only on `teams.microsoft.com`, `teams.cloud.microsoft` and `assignments.edu.cloud.microsoft`.
 
-### Self-host pipeline (advanced, optional; not recently verified)
+### Cloud self-host + Connect build (optional, v0.9.0)
+
+```mermaid
+flowchart LR
+    EXT[Extension, Connect build\nsame capture as the store build] -->|HTTPS POST /api/ingest\nyour key, one class per call| W[Your Cloudflare Worker]
+    W --> DB[(D1: items, events,\nreminders_sent)]
+    DB -->|diff: new / moved / submitted / removed| OUT[Outbox]
+    CRON[Cron every 5 min] -->|24 h / 3 h reminders\ndaily digest| OUT
+    OUT -->|sendMessage| TG[📱 Telegram\npaired chat only]
+    TG -->|/today /due /plan /doctor …| W
+    DB --> ICS[Secret .ics calendar feed]
+```
+
+- The server never logs into Teams; the extension sends what you already synced, only to the `*.workers.dev` address you entered and only with the permission you granted for it.
+- The store build is unchanged: it stays network-free (`connect-src 'none'`). The Connect build is a separate zip (`npm run pack:selfhost`, GitHub release v0.9.0).
+- Setup in 6 steps: [`docs/selfhost-guide.md`](docs/selfhost-guide.md).
+
+### Playwright pipeline (legacy, optional; not recently verified)
 
 ```mermaid
 flowchart LR
@@ -66,7 +83,7 @@ flowchart LR
     E -->|Express API :3457| I[JSON API /api/digest, /api/status]
 ```
 
-Both paths share the same parsing rules (`extension/core/digest-utils.js`) and post fingerprint (`extension/core/fingerprint.js`).
+All paths share the same parsing rules (`extension/core/digest-utils.js`) and post fingerprint (`extension/core/fingerprint.js`).
 
 ---
 
