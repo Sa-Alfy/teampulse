@@ -61,3 +61,7 @@ evidence/
 
 # Local capture exports (personal data) - never commit
 local-captures/
+
+# Wrangler local state and local secrets (self-host Worker)
+.wrangler/
+.dev.vars

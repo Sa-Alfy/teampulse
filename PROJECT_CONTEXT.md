@@ -379,7 +379,7 @@ flowchart TD
 
 ## 6. Self-Host Platform Roadmap (Cloudflare Workers + D1)
 
-> **Status (2026-10-05): S1 (Phase 1, pure core) built on branch `feat/selfhost-v1` (commit `e06c461`), not merged to `main`. Everything after Phase 1 is still planned.** Mark an item `[x]` only with evidence (test output, a curl result, a live check) and write that evidence next to it.
+> **Status (2026-10-05): Phase 1 (pure core) is merged to `main`. Phase 2 (Worker + D1) is built and tested locally on branch `feat/selfhost-v1`, not deployed. Everything after Phase 2 is still planned.** Mark an item `[x]` only with evidence (test output, a curl result, a live check) and write that evidence next to it.
 
 ### 6.1 Goal
 Make the self-host side the powerful, still easy-to-set-up half of TeamsPulse. The extension stays the simple path (Level 0, no setup). The server adds automatic, no-browser-needed value: change alerts, deadline reminders, a Telegram bot, a calendar feed.
@@ -422,7 +422,8 @@ Teams tab → extension (scrapes, fingerprints) → delta push → Worker + D1
 - [x] Wrangler's minimum Node version: `npm view wrangler` → 4.147.0, `engines.node >=22.0.0` (2026-10-05); local Node v24.19.0 is fine
 - [ ] D1 FTS5 support (for full-text search)
 - [ ] Whether a "Deploy to Cloudflare" button works for this repo
-- [ ] Real CPU cost of ingest on a realistic payload (measure in Phase 2)
+- [ ] Real CPU cost of ingest on a realistic payload. Node proxy only so far (see Phase 2); a deployed measurement is still needed.
+- [x] D1 accepts the schema (`WITHOUT ROWID`, partial indexes) and uses the partial indexes: checked on wrangler's **local** D1 (miniflare) with `EXPLAIN QUERY PLAN` (2026-10-05). Remote D1 not checked yet.
 - [ ] That the free plan never asks for a payment method during deploy
 
 ### 6.6 Phases (one small agent task per bullet group; each ends with test output)
@@ -442,16 +443,20 @@ Teams tab → extension (scrapes, fingerprints) → delta push → Worker + D1
 - [x] Run on a real local capture (14 assignments, file kept out of git in `local-captures/`): baseline 0 events; replay 0 events, 0 writes. Synthetic worst case (300 assignments + 200 posts) 3.8 ms median Node wall time on the dev machine; **not** a Worker CPU measurement.
 - [x] Tests: idempotent diff (same payload twice = 0 events); existing suite still green: `node --test` 137 pass, 1 skipped; `test:dom` 47/47; `test:e2e` 5/5 (2026-10-05)
 
-**Phase 2: Worker + D1**
-- [ ] Schema + migrations: items, events, reminders_sent, settings; indexes on every lookup
-- [ ] `POST /api/ingest` (delta payload), bearer key, constant-time compare, fail closed when the key is unset, 413/415/400 handling, hard size cap
-- [ ] `GET /api/events?since=`
-- [ ] CPU time logged per request; record the measured numbers here
+**Phase 2: Worker + D1** (built on `feat/selfhost-v1`, not deployed)
+- [x] Schema + migration `selfhost/worker/migrations/0001_init.sql`: settings, classes, items, events (outbox), reminders_sent, syncs, rate. Indexes: `items_class_live` (ingest load), `items_open_due` (reminders / agenda), `events_created` (pagination), `events_outbox`. Evidence: `EXPLAIN QUERY PLAN` on local D1 → `SEARCH items USING INDEX items_open_due (due_ms>? AND due_ms<?)` and `SEARCH items USING INDEX items_class_live (class=?)`; same check in `test/selfhost-worker.test.js`.
+- [x] `POST /api/ingest`: one class per call, 128 KiB cap (413 by Content-Length and by streamed size), 415 for non-JSON, 400 with fixed codes (never echoes input), bearer key compared as sha256 hex in constant time, 503 when no key is stored (fail closed), HTTPS only (403). Reads in ≤ 2 D1 round trips; **all writes (item upserts, events, class baseline, sync row, last-sync time) in ONE `db.batch`** — rollback test proves nothing is written when one statement fails.
+- [x] `GET /api/events?since=<ms>` and `?cursor=<ms>.<id>` (stable order by created_at, id; limit ≤ 100).
+- [x] `GET /health`: exactly four booleans (claimed, bot_token_set, webhook_set, migrated), no auth.
+- [x] Logs: one JSON line per request with counts and fixed codes only (test asserts no titles, bodies or keys; 500s log the error name only).
+- [x] Local evidence (2026-10-05): `node --test` 158 pass, 1 skipped (12 in `test/selfhost-worker.test.js`); `wrangler deploy --dry-run` bundles `extension/core` + `selfhost/core` (50.10 KiB, gzip 14.77 KiB); `wrangler dev --local-protocol https` smoke test: health 200, wrong key 401, 415, 413, baseline 200 (0 events), replay 200 (0 events, 0 writes), moved due date 200 (1 event).
+- [x] CPU proxy, Node wall time on the dev machine for JSON.parse + validate + diff + statement building (D1 stubbed): realistic 14–30 assignments ≤ 0.7 ms max; worst case within caps (300 assignments parsed from raw text + 100 posts, 81 KB) 3.84 ms p50 / 5.79 ms max. **Not** a Worker CPU measurement.
+- [ ] Deployed CPU per request from Workers Logs / Observability (`[observability] enabled = true` in `wrangler.toml`) — needs the owner's deploy.
 
 **Phase 3: Telegram**
-- [ ] Webhook, pairing via `/start <code>`, chat-ID allowlist
-- [ ] Alerts from events, priority + quiet hours
-- [ ] Commands: `/today`, `/week`, `/due`, `/search`
+- [ ] Webhook with `X-Telegram-Bot-Api-Secret-Token` check, pairing via `/start <code>` (one-time, expiring), chat-ID allowlist
+- [ ] Alerts from the events outbox, priority + quiet hours (`not_before`)
+- [ ] Commands: `/today`, `/week`, `/due`, `/plan`, `/done <n>` (numbers from the last `/due` list), `/undone` (lists done items) and `/undone <n>`
 - [ ] "Last synced N h ago" in replies
 
 **Phase 4: Reminders**
@@ -491,7 +496,12 @@ Teams tab → extension (scrapes, fingerprints) → delta push → Worker + D1
 - A class is fully covered only when all three tabs were captured. Removal = fully covered AND missing in 2 syncs with different syncIds at least 1 h apart. Baseline lasts until the first fully covered sync.
 - Submitted = tab `Completed`; event only on false → true.
 - Fallback-key collisions in one snapshot: skip due-date events for them and count the collision.
-- `/done <n>`: marks an item done server-side until the next sync reconciles it.
+- `/done <n>` is sticky: the item is hidden and not reminded until its due date passes (then it shows as overdue again) or Teams shows it Completed (a sync then clears the mark). `/undone <n>` removes the mark. Undated items stay done until Completed.
+- `due_date_changed` only for open (non-Completed) items. Completed year-less dates take the nearest year (as the frame's `inferDueDate` does when it knows no side).
+- Post baseline: `covered[].postsCaptured: true` sets it, even with zero posts. Posts of a class whose posts were not captured are stored without events and do not baseline it.
+- Baseline gates only change events. Reminders, `/today`, `/week`, `/due` and `/plan` use every stored item.
+- **Telegram "sent" rule (S3):** an outbox row (event or reminder) counts as sent only after Telegram answers `ok: true`; `sent_at` is written then. Before sending, a row is claimed (`claimed_at`, 2 min lease) so the ingest path and the cron can't send it twice at once. Why: a lost deadline alert is worse than a rare duplicate, and a duplicate only happens if the `sent_at` write fails after a successful send. Reminders: the cron writes the reminder's outbox row and its `reminders_sent` row in one batch, so a reminder id can enter the outbox only once.
+- **CPU plan:** measure (1) the Node proxy for every change to the ingest path; (2) local `wrangler dev` only for behaviour, not CPU (local workerd doesn't enforce or report the limit); (3) the deployed Worker's CPU time per invocation from Workers Logs / Observability. If deployed ingest exceeds ~7 ms CPU: have the extension always send `dueIso` (skips server-side text parsing, the costliest step: 3.84 → 1.18 ms p50 in the proxy), lower the per-call caps (assignments / posts per call), and move post classification and event formatting to the cron.
 - Claim flow: `/setup` requires the student's bot token (constant-time compare, D1-counter rate limit), then closes; `/rotatekey` from the paired chat; `/health` returns booleans only.
 - Daily digest (S4): default 07:30 Asia/Dhaka, configurable, can be turned off.
 - Any change under `extension/` for S6 stays on the branch and is not merged to `main` before the store submission; a test must prove the store build has no network code.
@@ -538,7 +548,7 @@ Teams tab → extension (scrapes, fingerprints) → delta push → Worker + D1
 
 ## 8. Test Coverage
 
-Counts on `main` as of v0.7.3 (2026-10-03): `node --test` 104 (103 pass, 1 skipped placeholder). On branch `feat/selfhost-v1` (2026-10-05): 138 (137 pass, 1 skipped), with 34 tests in `test/selfhost-core.test.js` · `npm run test:dom` 47 · `npm run test:e2e` 5, all passing.
+Counts on `main` as of v0.7.3 (2026-10-03): `node --test` 104 (103 pass, 1 skipped placeholder). On branch `feat/selfhost-v1` (2026-10-05): 159 (158 pass, 1 skipped), with 43 tests in `test/selfhost-core.test.js` and 12 in `test/selfhost-worker.test.js` · `npm run test:dom` 47 · `npm run test:e2e` 5, all passing.
 
 ### Unit Tests (`npm test` — `node --test`, 104 total: 103 pass, 1 skipped placeholder)
 

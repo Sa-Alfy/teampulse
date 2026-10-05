@@ -1,0 +1,16 @@
+# Self-host Worker. The Worker name also becomes part of the workers.dev URL;
+# the product name is not final (see selfhost/core/config.js).
+name = "teamspulse"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "teamspulse"
+# Replaced with the id printed by `wrangler d1 create teamspulse` before deploying.
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+# Workers Logs: records CPU time per invocation (used for the CPU measurement).
+[observability]
+enabled = true
