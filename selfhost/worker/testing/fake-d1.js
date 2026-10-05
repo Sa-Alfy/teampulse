@@ -16,9 +16,10 @@ export function createD1({ migrationsDir = null } = {}) {
       sqlite.exec(fs.readFileSync(path.join(migrationsDir, f), "utf8"));
     }
   }
-  const calls = { batches: [], directWrites: 0, failOn: null };
+  const calls = { batches: [], directWrites: 0, execs: 0, failOn: null };
 
   function exec(sql, params) {
+    calls.execs++;
     if (calls.failOn && calls.failOn.test(sql)) throw new Error("injected failure");
     const st = sqlite.prepare(sql);
     if (READ.test(sql)) return { results: st.all(...params), success: true, meta: {} };

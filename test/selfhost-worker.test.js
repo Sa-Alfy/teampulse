@@ -220,6 +220,51 @@ test("worker: /health returns exactly four booleans and needs no key", async () 
   for (const v of Object.values(res.body)) assert.strictEqual(typeof v, "boolean");
 });
 
+// ── auth hardening: refuse bad tokens before D1, cache the key hash ───────
+
+test("worker: missing, malformed or oversized tokens get 401 with zero D1 statements", async () => {
+  for (const configured of [true, false]) {
+    const env = await setup({ key: configured });
+    const bad = [null, "Basic abc", "Bearer short", `Bearer ${"a".repeat(129)}`, `Bearer ${"a".repeat(5000)}`, `Bearer ${KEY} extra`, "Bearer ab$cd_efghijklmnopqrstuv"];
+    for (const h of bad) {
+      const before = env.DB.calls.execs;
+      const r = new Request("https://worker.test/api/ingest", {
+        method: "POST", body: JSON.stringify(payload()),
+        headers: { "content-type": "application/json", ...(h ? { authorization: h } : {}) },
+      });
+      const res = await call(env, r);
+      assert.deepStrictEqual([res.status, res.body], [401, { error: "unauthorized" }], String(h).slice(0, 30));
+      assert.strictEqual(env.DB.calls.execs, before, `no D1 statement for ${String(h).slice(0, 30)}`);
+    }
+    const ev = await call(env, req("/api/events", { auth: null }));
+    assert.strictEqual(ev.status, 401);
+  }
+});
+
+test("worker: the key hash is read once per 60 s per isolate, including 'not set'", async () => {
+  const env = await setup();
+  const count = async (fn) => { const b = env.DB.calls.execs; await fn(); return env.DB.calls.execs - b; };
+  const t0 = NOW + 10 * 24 * HOUR; // fresh cache window for this env
+  const first = await count(() => call(env, req("/api/events?since=0"), t0));
+  const cached = await count(() => call(env, req("/api/events?since=0"), t0 + 59e3));
+  const expired = await count(() => call(env, req("/api/events?since=0"), t0 + 61e3));
+  assert.strictEqual(first, 2, "key read + events query");
+  assert.strictEqual(cached, 1, "events query only");
+  assert.strictEqual(expired, 2, "re-read after 60 s");
+  const wrong = await call(env, req("/api/events", { auth: "tp_wrong_key_0123456789abcdefghijklmnopqrstu" }), t0 + 62e3);
+  assert.strictEqual(wrong.status, 401, "cached hash still rejects a wrong key");
+
+  const fresh = await setup({ key: false });
+  const n1 = fresh.DB.calls.execs;
+  assert.strictEqual((await call(fresh, req("/api/events"), t0)).status, 503);
+  assert.strictEqual((await call(fresh, req("/api/events"), t0 + 30e3)).status, 503);
+  assert.strictEqual(fresh.DB.calls.execs - n1, 1, "'not set' is cached as well");
+  fresh.DB.sqlite.prepare("INSERT INTO settings (k, v) VALUES ('ingest_key_hash', ?)").run(await sha256Hex(KEY));
+  const routes = await import("../selfhost/worker/src/routes.js");
+  routes.invalidateKeyCache(fresh.DB);
+  assert.strictEqual((await call(fresh, req("/api/events"), t0 + 31e3)).status, 200, "invalidation picks up a new key at once");
+});
+
 // ── index use (EXPLAIN QUERY PLAN on SQLite; D1 checked with wrangler) ─────
 
 test("schema: hot queries use their indexes (EXPLAIN QUERY PLAN)", async () => {

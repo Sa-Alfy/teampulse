@@ -10,21 +10,42 @@ const { diffSync, assignmentKey, postKey } = diffMod;
 const { validateIngest, LIMITS } = validateMod;
 const { bearerToken, keyMatches } = authMod;
 
+// Stored key hash, cached per D1 binding in this isolate. A key set or rotated
+// from another isolate takes effect here within KEY_CACHE_MS. "Not set" is
+// cached too, so an unclaimed instance isn't a free D1 read per request.
+const KEY_CACHE_MS = 60e3;
+const keyCache = new WeakMap();
+
+/** Drop the cached hash (call after /setup or /rotatekey in this isolate). */
+export function invalidateKeyCache(db) {
+  keyCache.delete(db);
+}
+
+async function storedKeyHash(db, now) {
+  const hit = keyCache.get(db);
+  if (hit && now >= hit.at && now - hit.at < KEY_CACHE_MS) return hit.hash;
+  const s = await getSettings(db, ["ingest_key_hash"]);
+  const hash = s.ingest_key_hash || null;
+  keyCache.set(db, { hash, at: now });
+  return hash;
+}
+
 /**
- * Bearer key check. Fails closed: no stored key → 503 (instance not set up),
- * missing/wrong key → 401. Returns { settings } on success, { response } otherwise.
+ * Bearer key check. A missing, malformed or oversized token is refused (401)
+ * before any D1 read. Then fail closed: no stored key → 503, wrong key → 401.
  */
-async function authorize(request, db, extraKeys = []) {
-  const settings = await getSettings(db, ["ingest_key_hash", ...extraKeys]);
-  if (!settings.ingest_key_hash) return { response: error(503, "not_configured") };
-  const ok = await keyMatches(bearerToken(request.headers.get("authorization")), settings.ingest_key_hash);
-  if (!ok) return { response: error(401, "unauthorized") };
-  return { settings };
+async function authorize(request, db, now) {
+  const token = bearerToken(request.headers.get("authorization"));
+  if (!token) return { response: error(401, "unauthorized") };
+  const hash = await storedKeyHash(db, now);
+  if (!hash) return { response: error(503, "not_configured") };
+  if (!(await keyMatches(token, hash))) return { response: error(401, "unauthorized") };
+  return {};
 }
 
 export async function ingest(request, env, now) {
   const db = env.DB;
-  const auth = await authorize(request, db, ["tz", "quiet"]);
+  const auth = await authorize(request, db, now);
   if (auth.response) return auth.response;
 
   const ctype = (request.headers.get("content-type") || "").toLowerCase();
@@ -38,15 +59,16 @@ export async function ingest(request, env, now) {
   if (!v.ok) return error(400, v.error);
   const p = v.value;
 
-  const p2 = prefs(auth.settings);
+  const assignments = p.assignments.map((a) => ({ ...a, class: p.class }));
+  const posts = p.posts.map((x) => ({ ...x, class: p.class }));
+  const keys = [...assignments.map(assignmentKey), ...posts.map(postKey)];
+  const prev = await loadPrev(db, p.class, keys);
+  const p2 = prefs(prev.settings);
   const sync = {
     syncId: p.syncId, at: now, tz: p2.tz,
     covered: [{ class: p.class, tabs: p.tabs, postsCaptured: p.postsCaptured }],
-    assignments: p.assignments.map((a) => ({ ...a, class: p.class })),
-    posts: p.posts.map((x) => ({ ...x, class: p.class })),
+    assignments, posts,
   };
-  const keys = [...sync.assignments.map(assignmentKey), ...sync.posts.map(postKey)];
-  const prev = await loadPrev(db, p.class, keys);
   const res = await diffSync(prev, sync);
   const classState = res.classes[p.class] || { a: false, p: false };
   await db.batch(writeStatements(db, {
@@ -62,9 +84,9 @@ export async function ingest(request, env, now) {
 }
 
 /** GET /api/events?since=<ms>&cursor=<ms>.<id>&limit=<1..100> — oldest first. */
-export async function events(request, env) {
+export async function events(request, env, now) {
   const db = env.DB;
-  const auth = await authorize(request, db);
+  const auth = await authorize(request, db, now);
   if (auth.response) return auth.response;
 
   const url = new URL(request.url);

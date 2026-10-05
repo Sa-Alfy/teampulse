@@ -20,7 +20,7 @@ function timingSafeEqual(a, b) {
 
 /** Token from "Authorization: Bearer <token>", or null. */
 function bearerToken(header) {
-  if (typeof header !== "string") return null;
+  if (typeof header !== "string" || header.length > 256) return null;
   const m = header.match(/^Bearer ([A-Za-z0-9_-]{20,128})$/);
   return m ? m[1] : null;
 }

@@ -60,14 +60,15 @@ export function prefs(settings) {
 }
 
 /**
- * Previous state for one class: its baseline flags, its live assignments, and
- * any snapshot/post keys stored elsewhere (moved class, removed, known posts).
- * Two read round trips at most.
+ * Previous state for one class: its baseline flags, its live assignments, any
+ * snapshot/post keys stored elsewhere (moved class, removed, known posts), and
+ * the tz / quiet settings. Two read round trips at most.
  */
 export async function loadPrev(db, cls, keys) {
-  const [classRes, itemsRes] = await db.batch([
+  const [classRes, itemsRes, settingsRes] = await db.batch([
     db.prepare("SELECT a_baselined, p_baselined FROM classes WHERE name = ?").bind(cls),
     db.prepare(LOAD_CLASS_SQL).bind(cls),
+    db.prepare("SELECT k, v FROM settings WHERE k IN ('tz', 'quiet')"),
   ]);
   const row = classRes.results[0];
   const items = new Map(itemsRes.results.map((r) => [r.key, rowToRecord(r)]));
@@ -83,6 +84,7 @@ export async function loadPrev(db, cls, keys) {
   return {
     classes: row ? { [cls]: { a: row.a_baselined === 1, p: row.p_baselined === 1 } } : {},
     items,
+    settings: Object.fromEntries(settingsRes.results.map((r) => [r.k, r.v])),
   };
 }
 
