@@ -11,6 +11,10 @@ database_name = "teamspulse"
 database_id = "00000000-0000-0000-0000-000000000000"
 migrations_dir = "migrations"
 
+# One cron trigger (the free plan allows 5 per account): reminders, digest, outbox.
+[triggers]
+crons = ["*/5 * * * *"]
+
 # Workers Logs: records CPU time per invocation (used for the CPU measurement).
 [observability]
 enabled = true

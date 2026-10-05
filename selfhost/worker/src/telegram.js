@@ -28,7 +28,7 @@ export function setFetchForTests(f) {
   fetchImpl = f || ((...a) => fetch(...a));
 }
 
-const WEBHOOK_KEYS = ["tg_secret_hash", "chat_id", "pair_hash", "pair_expires", "pair_fails", "last_sync_at", "tz", "quiet", "list_due", "list_undone"];
+const WEBHOOK_KEYS = ["tg_secret_hash", "chat_id", "pair_hash", "pair_expires", "pair_fails", "last_sync_at", "tz", "quiet", "list_due", "list_undone", "digest_time"];
 
 function setStmt(db, k, v) {
   return db.prepare("INSERT INTO settings (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").bind(k, String(v));
@@ -108,12 +108,13 @@ export async function webhook(request, env, now) {
   const items = needsItems ? (await db.prepare(OPEN_ITEMS_SQL).all()).results.map(rowToRecord) : [];
   const out = reply(c, {
     items, now, tz, lastSyncAt: s.last_sync_at ? Number(s.last_sync_at) : null,
-    lists: { due: parseList(s.list_due), undone: parseList(s.list_undone) },
+    lists: { due: parseList(s.list_due), undone: parseList(s.list_undone) }, digest: s.digest_time,
   });
   const stmts = [];
   for (const w of out.writes) stmts.push(db.prepare("UPDATE items SET done_at = ? WHERE key = ? AND kind = 'a'").bind(w.doneAt ?? null, w.key));
   if (out.lists.due) stmts.push(setStmt(db, "list_due", JSON.stringify(out.lists.due)));
   if (out.lists.undone) stmts.push(setStmt(db, "list_undone", JSON.stringify(out.lists.undone)));
+  for (const [k, v] of Object.entries(out.settings || {})) stmts.push(setStmt(db, k, v));
   if (stmts.length) await db.batch(stmts);
   log({ route: "telegram", cmd: c.cmd.slice(0, 12), items: items.length, writes: out.writes.length });
   return answer(chat.id, out.text);

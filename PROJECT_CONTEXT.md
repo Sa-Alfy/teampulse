@@ -468,7 +468,10 @@ Built on `feat/selfhost-v1` (2026-10-05), tested with a fake D1 and a fake Teleg
 - [x] Outbox sender (`flushOutbox`): rows with `not_before <= now` (quiet hours) are claimed with a 2 min lease (`UPDATE … RETURNING id`, a separate write by design), grouped into messages ≤ 3500 chars, at most 10 messages per flush, stop on 429, up to 8 attempts. `sent_at` is written only after Telegram answers `ok: true`. Ingest flushes inline via `ctx.waitUntil` only when it created 1–5 events; larger batches wait for the S4 cron. Logs carry counts and HTTP status codes only (test: no token, no text).
 
 **Phase 4: Reminders**
-- [ ] One cron trigger every 5 min runs the planner; idempotent via `reminders_sent`
+- [x] One cron trigger (`*/5 * * * *`, `scheduled()` → `selfhost/worker/src/cron.js`), built and tested locally with a fake D1 and fake Telegram (`test/selfhost-cron.test.js`, 9 tests, 2026-10-05). **Not run on the deployed Worker yet.**
+  - Reminders: candidates from `items_open_due` (due in the next 24 h); used ids looked up by primary key (every possible id of the candidates, no `item_key` scan); each reminder's `reminders_sent` row and its outbox event are written in ONE batch. 3h / due_soon go out at once; 24h is planned only outside quiet hours. A moved due date gets new ids. Unpaired instances plan nothing (no stale backlog).
+  - Daily digest: default 07:30 local, sent by the first run inside a 30 min window, once per day (`last_digest_day`, written in the same batch as the event); a missed window is skipped. `/digest`, `/digest HH:MM`, `/digest off` in Telegram.
+  - Then `flushOutbox` sends everything due (including events left over from ingest).
 
 **Phase 5: Setup and health**
 - [ ] `/setup`: auto-generated key shown once as a single pairing code

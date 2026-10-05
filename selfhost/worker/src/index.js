@@ -3,6 +3,7 @@
 import { error, log } from "./http.js";
 import { ingest, events, health } from "./routes.js";
 import { webhook } from "./telegram.js";
+import { runCron } from "./cron.js";
 
 const ROUTES = {
   "/api/ingest": { POST: ingest },
@@ -31,5 +32,12 @@ export async function handle(request, env, now, ctx) {
 export default {
   fetch(request, env, ctx) {
     return handle(request, env, Date.now(), ctx);
+  },
+  async scheduled(controller, env) {
+    try {
+      await runCron(env, controller.scheduledTime || Date.now());
+    } catch (e) {
+      log({ route: "cron", status: 500, err: e && e.name ? String(e.name) : "Error" });
+    }
   },
 };

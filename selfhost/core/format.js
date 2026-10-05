@@ -82,6 +82,13 @@ function formatEvent(ev, ctx) {
       return `${clean(p.tag, 30)} ${where}\n${clean(p.subject || p.snippet)}${p.subject && p.snippet ? `\n${clean(p.snippet, 200)}` : ""}`;
     case "new_post":
       return `📢 New post ${where}\n${clean(p.subject || p.snippet)}${p.subject && p.snippet ? `\n${clean(p.snippet, 200)}` : ""}`;
+    case "reminder": {
+      // The outbox adds the "Last synced" footer to every message.
+      const head = p.kind === "due_soon" ? "⚠️ Due soon" : `⏰ Reminder (${clean(p.slot, 8)})`;
+      return `${head} ${where}\n${clean(p.title)}\nDue: ${fmtDue(p.dueIso, now, tz)}\nSubmitted already? Sync Teams to update.`;
+    }
+    case "digest":
+      return clean(p.text, 3000);
     default:
       return null;
   }
@@ -90,6 +97,7 @@ function formatEvent(ev, ctx) {
 /** Alert priority: "high" ignores quiet hours, "normal" waits for them to end. */
 function eventPriority(ev) {
   if (ev.type === "due_date_changed") return "high";
+  if (ev.type === "reminder" && ev.payload && ev.payload.slot !== "24h") return "high"; // 3h / due_soon ignore quiet hours
   if (ev.type === "tagged_post" && ev.payload && HIGH_TAGS.has(ev.payload.tag)) return "high";
   return "normal";
 }
@@ -146,13 +154,19 @@ function formatPlan(plan, ctx) {
   return withFooter(out, ctx);
 }
 
-function formatDigest(sel, ctx) {
-  const body = [`☀️ ${PRODUCT_NAME} daily digest`, ...section("Overdue:", sel.overdue, ctx), ...section("Due in the next 7 days:", sel.due, ctx)];
+/** Digest without the footer (the outbox adds "Last synced" when it sends). */
+function formatDigestBody(sel, ctx) {
+  const shown = (rows) => rows.slice(0, 15);
+  const body = [`☀️ ${PRODUCT_NAME} daily digest`, ...section("Overdue:", shown(sel.overdue), ctx), ...section("Due in the next 7 days:", shown(sel.due), ctx)];
   if (body.length === 1) body.push("Nothing due this week.");
-  return withFooter(body, ctx);
+  return body.join("\n");
+}
+
+function formatDigest(sel, ctx) {
+  return withFooter([formatDigestBody(sel, ctx)], ctx);
 }
 
 module.exports = {
   clean, ago, lastSyncedLine, fmtWhen, fmtLeft, fmtDue, formatEvent, eventPriority,
-  formatReminder, formatToday, formatWeek, formatDue, formatPlan, formatDigest,
+  formatReminder, formatToday, formatWeek, formatDue, formatPlan, formatDigest, formatDigestBody,
 };

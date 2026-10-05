@@ -15,6 +15,7 @@
 const { PRODUCT_NAME, MAX_LIST_ITEMS } = require("./config");
 const agenda = require("./agenda");
 const fmt = require("./format");
+const { digestSetting } = require("./schedule");
 
 const ALERT_MAX = 3500;          // Telegram's limit is 4096; leave room
 const REPLY_MAX = 4000;
@@ -32,6 +33,7 @@ const HELP = [
   "/plan — what to do first, crunch days",
   "/done <n> — mark item n from /due as done",
   "/undone — list items marked done; /undone <n> to restore",
+  "/digest — daily digest time; /digest 07:30 or /digest off",
 ].join("\n");
 
 function parseCommand(text) {
@@ -62,6 +64,7 @@ function reply(c, ctx) {
   const fctx = { now, tz, lastSyncAt: ctx.lastSyncAt };
   const lists = {};
   const writes = [];
+  const settings = {};
   const byKey = new Map(items.map((r) => [r.key, r]));
   let text;
 
@@ -116,10 +119,26 @@ function reply(c, ctx) {
       text = `${text}\n\n${fmt.lastSyncedLine(ctx.lastSyncAt, now)}`;
       break;
     }
+    case "digest": {
+      const arg = c.arg.toLowerCase();
+      if (!arg) {
+        const cur = digestSetting(ctx.digest);
+        text = cur === "off" ? "Daily digest is off. /digest 07:30 turns it on." : `Daily digest at ${cur} (${tz}). /digest off turns it off.`;
+      } else if (arg === "off") {
+        settings.digest_time = "off";
+        text = "Daily digest turned off.";
+      } else if (/^\d{1,2}:\d{2}$/.test(arg) && digestSetting(arg) === arg) {
+        settings.digest_time = arg;
+        text = `Daily digest set to ${arg} (${tz}).`;
+      } else {
+        text = "Use /digest HH:MM (24-hour, e.g. /digest 07:30) or /digest off.";
+      }
+      break;
+    }
     default:
       text = `${HELP}\n\n${fmt.lastSyncedLine(ctx.lastSyncAt, now)}`;
   }
-  return { text: clipReply(text), writes, lists };
+  return { text: clipReply(text), writes, lists, settings };
 }
 
 // ── pairing ────────────────────────────────────────────────────────────────
