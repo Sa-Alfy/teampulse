@@ -107,7 +107,8 @@ teampulse/
 │   ├── background.js                ← service worker: message router + badge
 │   ├── popup.html / popup.css / popup.js
 │   └── icons/
-├── selfhost/core/                   ← self-host core (branch feat/selfhost-v1): diff, reminders, plan, formatters
+├── selfhost/core/                   ← self-host core: diff, reminders, plan, bot, formatters (pure)
+├── selfhost/worker/                 ← Cloudflare Worker + D1 migrations (npm install --ignore-scripts)
 ├── tools/
 │   ├── dom-probe.js                 ← read-only console probe: channel view
 │   └── dom-probe-teams-list.js      ← read-only console probe: classes grid
@@ -130,9 +131,9 @@ teampulse/
 
 Optional and advanced. This path has not been recently verified. It runs the scraper on your machine on a schedule and produces `digest.md`, a Telegram push and a local JSON API. Not needed for the extension.
 
-### Planned cloud self-host platform
+### Cloud self-host (Cloudflare Workers + D1, in progress)
 
-**Status (2026-10-05): in progress on branch `feat/selfhost-v1`.** Stage S1 (the pure core in `selfhost/core/`: change detection, reminder planning, `/plan` ranking, message formatting) is built and tested. Stage S2 (the Worker and D1 schema in `selfhost/worker/`: ingest, events, health) runs locally with wrangler but has **not been deployed**. There is no Telegram bot, reminder cron or deploy guide yet. The intended next-generation self-host path uses Cloudflare Workers + D1: the extension collects and fingerprints Teams data, then an opt-in server handles change alerts, 24-hour / 3-hour reminders, Telegram commands, and an `.ics` feed. The server will not log into Teams or store a Teams session. The existing Express server remains the legacy self-host API until the Worker reaches parity.
+**Status (2026-10-05):** the server side is built (S1–S5): change detection, a Telegram bot (`/today` `/week` `/due` `/plan` `/done` `/undone` `/digest` `/doctor` `/rotatekey` `/rotatecal` `/deleteall`), 24 h / 3 h reminders and a daily digest on a 5-minute cron, a secret `.ics` calendar feed, and a one-time `/setup` claim page. Setup guide: [`docs/selfhost-guide.md`](docs/selfhost-guide.md). **Verified live by the owner:** setup, Telegram pairing, `/doctor`, the cron heartbeat. **Not yet:** the extension can't send data to the server — that needs the separate self-host "Connect" build (S6, not built), so alerts, reminders and the calendar have no real data yet. Approach: Cloudflare Workers + D1: the extension collects and fingerprints Teams data, then an opt-in server handles change alerts, 24-hour / 3-hour reminders, Telegram commands, and an `.ics` feed. The server will not log into Teams or store a Teams session. The existing Express server remains the legacy self-host API until the Worker reaches parity.
 
 The extension remains the no-setup path. The full phased roadmap, evidence requirements, security rules, and open decisions are in [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) under **Self-Host Platform Roadmap**.
 
