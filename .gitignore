@@ -58,3 +58,6 @@ dist/
 
 # Owner evidence (personal data) - never commit
 evidence/
+
+# Local capture exports (personal data) - never commit
+local-captures/
